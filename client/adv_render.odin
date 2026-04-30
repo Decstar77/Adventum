@@ -10,6 +10,7 @@ import "core:mem"
 import "core:os"
 import "core:path/filepath"
 import "core:strconv"
+import "core:strings"
 import t "core:time"
 
 import sapp "sokol/app"
@@ -262,6 +263,8 @@ color_hex_to_float :: proc(hex: string) -> v4 {
 }
 
 render_frame :: proc() {
+	log_render()
+
 	app_state.bind.images[IMG_tex0] = atlas.sg_image
 	app_state.bind.images[IMG_tex1] = images[font.img_id].sg_img
 
@@ -279,6 +282,8 @@ render_frame :: proc() {
 	}
 	sg.end_pass()
 	sg.commit()
+
+	clear_draw_frame()
 }
 
 //
@@ -493,7 +498,18 @@ Image :: struct {
 	atlas_uvs:    Vector4,
 }
 images: [512]Image
+image_names: [512]string
 image_count: int
+
+image_by_name :: proc(name: string) -> ImageId {
+	for i in 1 ..< image_count {
+		if image_names[i] == name {
+			return ImageId(i)
+		}
+	}
+	log_warnf("image_by_name: %q not found", name)
+	return IMAGE_NIL
+}
 
 get_pixel :: proc(data: [^]byte, w: i32, h: i32, x: i32, y: i32) -> (u8, u8, u8, u8) {
 	offset: i32 = (y * w + x) * 4
@@ -599,6 +615,10 @@ init_images :: proc() {
 		pad_image(&img)
 
 		images[id] = img
+
+		// store basename (without extension) for image_by_name lookup
+		stem := filepath.short_stem(filepath.base(path))
+		image_names[id] = strings.clone(stem)
 	}
 	image_count = highest_id + 1
 

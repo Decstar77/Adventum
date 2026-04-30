@@ -59,6 +59,9 @@ F4Pressed := false
 
 cameraPos: v2 = {0, 0}
 
+frame_dt: f32 = 1.0 / 60.0
+last_frame_time: f64 = 0
+
 main :: proc() {
 	sapp.run(
 		{
@@ -89,6 +92,8 @@ atto_event :: proc "c" (ev: ^sapp.Event) {
 		#partial switch (ev.key_code) {
 		case .ESCAPE:
 			sapp.quit()
+		case .GRAVE_ACCENT:
+			log_toggle_console()
 		case .W:
 			playerMoveUp = true
 		case .S:
@@ -126,6 +131,10 @@ atto_event :: proc "c" (ev: ^sapp.Event) {
 		case .F4:
 			F4Pressed = false
 		}
+	}
+
+	if (ev.type == .MOUSE_SCROLL) {
+		log_handle_scroll(ev.scroll_y)
 	}
 
 	if (ev.type == .MOUSE_MOVE) {
@@ -198,6 +207,7 @@ atto_init :: proc "c" () {
 	init_images()
 	init_fonts()
 	init_render()
+	net_init()
 
 	game_start()
 }
@@ -205,6 +215,17 @@ atto_init :: proc "c" () {
 atto_frame :: proc "c" () {
 	using runtime, linalg
 	context = runtime.default_context()
+
+	now := seconds_since_init()
+	if last_frame_time == 0 {
+		frame_dt = 1.0 / 60.0
+	} else {
+		frame_dt = f32(now - last_frame_time)
+		if frame_dt > 0.1 {frame_dt = 0.1}
+	}
+	last_frame_time = now
+
+	net_update()
 
 	game_update()
 
@@ -218,6 +239,8 @@ atto_frame :: proc "c" () {
 
 atto_cleanup :: proc "c" () {
 	context = runtime.default_context()
+
+	net_shutdown()
 
 	audio_shutdown()
 
