@@ -287,6 +287,15 @@ text_create_pipeline :: proc(t: ^Text_Renderer, r: ^Renderer) -> bool {
 	return vk_check(vk.CreateGraphicsPipelines(r.device, 0, 1, &info, nil, &t.pipeline), "text GraphicsPipeline")
 }
 
+text_measure :: proc(t: ^Text_Renderer, s: string) -> f32 {
+	width := f32(0)
+	for ch in s {
+		if int(ch) < FONT_FIRST_CHAR || int(ch) >= FONT_FIRST_CHAR + FONT_NUM_CHARS do continue
+		width += t.chardata[int(ch) - FONT_FIRST_CHAR].xadvance
+	}
+	return width
+}
+
 text_push :: proc(t: ^Text_Renderer, x, y: f32, s: string, color: [4]f32) {
 	xpos := x
 	ypos := y

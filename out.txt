@@ -1,0 +1,2 @@
+present mode: MAILBOX
+monitor: 1920x1080 @ 165Hz

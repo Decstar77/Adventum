@@ -1,10 +1,9 @@
 package main
 
+import "core:thread"
 import "core:fmt"
-import "core:math"
 import "core:os"
 import "core:time"
-
 import "vendor:glfw"
 
 main :: proc() {
@@ -38,28 +37,59 @@ main :: proc() {
 	}
 	defer gfx_shutdown(&g)
 
-	start := time.now()
+	ui: UI
+	clicks := 0
+
+	monitor := glfw.GetPrimaryMonitor()
+	vid_mode := glfw.GetVideoMode(monitor)
+	refresh_hz := vid_mode != nil ? i32(vid_mode.refresh_rate) : 0
+	fmt.printfln("monitor: %dx%d @ %dHz", vid_mode != nil ? vid_mode.width : 0, vid_mode != nil ? vid_mode.height : 0, refresh_hz)
+
+	last_time := glfw.GetTime()
+	frame_dt: f64 = 0
+	fps_accum: f64 = 0
+	fps_frames := 0
+	fps: f64 = 0
+	frame_ms: f64 = 0
 
 	for !glfw.WindowShouldClose(window) {
-		glfw.PollEvents()
+		now := glfw.GetTime()
+		frame_dt = now - last_time
+		last_time = now
 
-		t := f32(time.duration_seconds(time.since(start)))
+		fps_accum += frame_dt
+		fps_frames += 1
+		if fps_accum >= 0.25 {
+			fps = f64(fps_frames) / fps_accum
+			frame_ms = (fps_accum / f64(fps_frames)) * 1000
+			fps_accum = 0
+			fps_frames = 0
+		}
+
+		glfw.PollEvents()
+		ui_update(&ui, window)
 
 		if !gfx_begin(&g) do continue
 
-		draw_rect(&g, 60, 60, 200, 120, {0.85, 0.30, 0.30, 1})
-		draw_rect(&g, 290, 60, 200, 120, {0.30, 0.85, 0.40, 1})
+		sw := f32(r.swapchain_extent.width)
+		sh := f32(r.swapchain_extent.height)
 
-		draw_circle(&g, 620, 120, 60, {0.30, 0.60, 1.00, 1})
-		draw_circle(&g, 760, 120, 40 + math.sin(t * 3) * 10, {1.00, 0.85, 0.30, 1})
+		bw, bh := f32(240), f32(72)
+		bx := (sw - bw) * 0.5
+		by := (sh - bh) * 0.5
 
-		draw_line(&g, 80, 260, 1200, 260, 4, {1, 1, 1, 0.6})
-		draw_line(&g, 80, 280, 80 + math.cos(t) * 400 + 400, 280 + math.sin(t) * 80, 12, {1.0, 0.4, 0.8, 1})
+		if ui_button(&ui, &g, "Click me!", bx, by, bw, bh) {
+			clicks += 1
+		}
 
-		draw_text(&g, 24, 48, "Hello, Adventum!")
-		draw_text(&g, 24, 96, "shapes + text via Vulkan", {0.6, 0.9, 1.0, 1})
-		draw_text(&g, 24, 360, "rect / circle / line / text", {1, 1, 0.7, 1})
+		label := fmt.tprintf("clicks: %d", clicks)
+		tw := text_measure(&g.text, label)
+		draw_text(&g, (sw - tw) * 0.5, by - 24, label, {0.8, 0.9, 1.0, 1})
+
+		stats := fmt.tprintf("fps %.0f  %.2fms  refresh %dHz", fps, frame_ms, refresh_hz)
+		draw_text(&g, 8, 8 + FONT_PIXEL_SIZE, stats, {0.7, 0.95, 0.7, 1})
 
 		gfx_end(&g)
+		free_all(context.temp_allocator)
 	}
 }
