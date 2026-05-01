@@ -5,9 +5,8 @@ import "core:math/linalg"
 import "core:math/rand"
 import "core:slice"
 
-WORLD_SCALE :: f32(4) // pixel zoom for the world view
+WORLD_SCALE :: f32(2) // pixel zoom for the world view
 PLAYER_SPEED :: f32(80) // world pixels per second
-CAMERA_SMOOTH :: f32(8) // higher = snappier follow
 PROP_COUNT :: 60
 PROP_SPREAD :: f32(400) // half-extent of the scatter area, in world pixels
 
@@ -56,7 +55,6 @@ game_update :: proc() {
 		player.pos += dir * PLAYER_SPEED * frame_dt
 	}
 
-	// smooth camera follow
 	cameraPos = player.pos;
 
 	// world camera
