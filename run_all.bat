@@ -5,5 +5,4 @@ if %ERRORLEVEL% neq 0 (
     exit /b %ERRORLEVEL%
 )
 
-start "Adventum Server" "build/server.exe"
 call "build/client.exe"
