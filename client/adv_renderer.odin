@@ -7,36 +7,31 @@ import vk "vendor:vulkan"
 
 MAX_FRAMES_IN_FLIGHT :: 2
 
-VERT_SPV := #load("shaders/triangle.vert.spv")
-FRAG_SPV := #load("shaders/triangle.frag.spv")
-
 Renderer :: struct {
-	window:             glfw.WindowHandle,
-	instance:           vk.Instance,
-	surface:            vk.SurfaceKHR,
-	physical_device:    vk.PhysicalDevice,
-	device:             vk.Device,
-	graphics_family:    u32,
-	present_family:     u32,
-	graphics_queue:     vk.Queue,
-	present_queue:      vk.Queue,
-	swapchain:          vk.SwapchainKHR,
-	swapchain_format:   vk.Format,
-	swapchain_extent:   vk.Extent2D,
-	swapchain_images:   []vk.Image,
-	swapchain_views:    []vk.ImageView,
-	render_pass:        vk.RenderPass,
-	pipeline_layout:    vk.PipelineLayout,
-	pipeline:           vk.Pipeline,
-	framebuffers:       []vk.Framebuffer,
-	command_pool:       vk.CommandPool,
-	command_buffers:    [MAX_FRAMES_IN_FLIGHT]vk.CommandBuffer,
-	image_avail_sems:   [MAX_FRAMES_IN_FLIGHT]vk.Semaphore,
-	render_done_sems:   [MAX_FRAMES_IN_FLIGHT]vk.Semaphore,
-	in_flight_fences:   [MAX_FRAMES_IN_FLIGHT]vk.Fence,
-	current_frame:      u32,
-
-	text:               Text_Renderer,
+	window:               glfw.WindowHandle,
+	instance:             vk.Instance,
+	surface:              vk.SurfaceKHR,
+	physical_device:      vk.PhysicalDevice,
+	device:               vk.Device,
+	graphics_family:      u32,
+	present_family:       u32,
+	graphics_queue:       vk.Queue,
+	present_queue:        vk.Queue,
+	swapchain:            vk.SwapchainKHR,
+	swapchain_format:     vk.Format,
+	swapchain_extent:     vk.Extent2D,
+	swapchain_images:     []vk.Image,
+	swapchain_views:      []vk.ImageView,
+	render_pass:          vk.RenderPass,
+	framebuffers:         []vk.Framebuffer,
+	command_pool:         vk.CommandPool,
+	command_buffers:      [MAX_FRAMES_IN_FLIGHT]vk.CommandBuffer,
+	image_avail_sems:     [MAX_FRAMES_IN_FLIGHT]vk.Semaphore,
+	render_done_sems:     [MAX_FRAMES_IN_FLIGHT]vk.Semaphore,
+	in_flight_fences:     [MAX_FRAMES_IN_FLIGHT]vk.Fence,
+	current_frame:        u32,
+	current_image_index:  u32,
+	clear_color:          [4]f32,
 }
 
 vk_check :: proc(r: vk.Result, where_: string, loc := #caller_location) -> bool {
@@ -49,6 +44,7 @@ vk_check :: proc(r: vk.Result, where_: string, loc := #caller_location) -> bool 
 
 renderer_init :: proc(r: ^Renderer, window: glfw.WindowHandle) -> bool {
 	r.window = window
+	r.clear_color = {0.01, 0.01, 0.02, 1.0}
 
 	vk.load_proc_addresses_global(rawptr(glfw.GetInstanceProcAddress))
 
@@ -63,19 +59,16 @@ renderer_init :: proc(r: ^Renderer, window: glfw.WindowHandle) -> bool {
 	if !create_swapchain(r) do return false
 	if !create_image_views(r) do return false
 	if !create_render_pass(r) do return false
-	if !create_pipeline(r) do return false
 	if !create_framebuffers(r) do return false
 	if !create_command_pool(r) do return false
 	if !create_command_buffers(r) do return false
 	if !create_sync_objects(r) do return false
-	if !text_init(r) do return false
 	return true
 }
 
 renderer_shutdown :: proc(r: ^Renderer) {
 	if r.device != nil {
 		vk.DeviceWaitIdle(r.device)
-		text_shutdown(r)
 		for i in 0 ..< MAX_FRAMES_IN_FLIGHT {
 			if r.image_avail_sems[i] != 0 do vk.DestroySemaphore(r.device, r.image_avail_sems[i], nil)
 			if r.render_done_sems[i] != 0 do vk.DestroySemaphore(r.device, r.render_done_sems[i], nil)
@@ -84,8 +77,6 @@ renderer_shutdown :: proc(r: ^Renderer) {
 		if r.command_pool != 0 do vk.DestroyCommandPool(r.device, r.command_pool, nil)
 		for fb in r.framebuffers do vk.DestroyFramebuffer(r.device, fb, nil)
 		delete(r.framebuffers)
-		if r.pipeline != 0 do vk.DestroyPipeline(r.device, r.pipeline, nil)
-		if r.pipeline_layout != 0 do vk.DestroyPipelineLayout(r.device, r.pipeline_layout, nil)
 		if r.render_pass != 0 do vk.DestroyRenderPass(r.device, r.render_pass, nil)
 		for v in r.swapchain_views do vk.DestroyImageView(r.device, v, nil)
 		delete(r.swapchain_views)
@@ -97,6 +88,83 @@ renderer_shutdown :: proc(r: ^Renderer) {
 	if r.instance != nil do vk.DestroyInstance(r.instance, nil)
 }
 
+renderer_begin_frame :: proc(r: ^Renderer) -> (cb: vk.CommandBuffer, ok: bool) {
+	frame := r.current_frame
+	vk.WaitForFences(r.device, 1, &r.in_flight_fences[frame], true, max(u64))
+
+	acq := vk.AcquireNextImageKHR(r.device, r.swapchain, max(u64), r.image_avail_sems[frame], 0, &r.current_image_index)
+	if acq != .SUCCESS && acq != .SUBOPTIMAL_KHR {
+		fmt.eprintfln("AcquireNextImageKHR: %v", acq)
+		return cb, false
+	}
+
+	vk.ResetFences(r.device, 1, &r.in_flight_fences[frame])
+	cb = r.command_buffers[frame]
+	vk.ResetCommandBuffer(cb, {})
+
+	begin := vk.CommandBufferBeginInfo{sType = .COMMAND_BUFFER_BEGIN_INFO}
+	vk.BeginCommandBuffer(cb, &begin)
+
+	clear := vk.ClearValue{color = {float32 = r.clear_color}}
+	rp_begin := vk.RenderPassBeginInfo{
+		sType           = .RENDER_PASS_BEGIN_INFO,
+		renderPass      = r.render_pass,
+		framebuffer     = r.framebuffers[r.current_image_index],
+		renderArea      = {extent = r.swapchain_extent},
+		clearValueCount = 1,
+		pClearValues    = &clear,
+	}
+	vk.CmdBeginRenderPass(cb, &rp_begin, .INLINE)
+
+	viewport := vk.Viewport{
+		x        = 0,
+		y        = 0,
+		width    = f32(r.swapchain_extent.width),
+		height   = f32(r.swapchain_extent.height),
+		minDepth = 0,
+		maxDepth = 1,
+	}
+	vk.CmdSetViewport(cb, 0, 1, &viewport)
+	scissor := vk.Rect2D{extent = r.swapchain_extent}
+	vk.CmdSetScissor(cb, 0, 1, &scissor)
+
+	ok = true
+	return
+}
+
+renderer_end_frame :: proc(r: ^Renderer) {
+	frame := r.current_frame
+	cb := r.command_buffers[frame]
+	vk.CmdEndRenderPass(cb)
+	vk.EndCommandBuffer(cb)
+
+	wait_stage := vk.PipelineStageFlags{.COLOR_ATTACHMENT_OUTPUT}
+	submit := vk.SubmitInfo{
+		sType                = .SUBMIT_INFO,
+		waitSemaphoreCount   = 1,
+		pWaitSemaphores      = &r.image_avail_sems[frame],
+		pWaitDstStageMask    = &wait_stage,
+		commandBufferCount   = 1,
+		pCommandBuffers      = &r.command_buffers[frame],
+		signalSemaphoreCount = 1,
+		pSignalSemaphores    = &r.render_done_sems[frame],
+	}
+	vk.QueueSubmit(r.graphics_queue, 1, &submit, r.in_flight_fences[frame])
+
+	image_index := r.current_image_index
+	present := vk.PresentInfoKHR{
+		sType              = .PRESENT_INFO_KHR,
+		waitSemaphoreCount = 1,
+		pWaitSemaphores    = &r.render_done_sems[frame],
+		swapchainCount     = 1,
+		pSwapchains        = &r.swapchain,
+		pImageIndices      = &image_index,
+	}
+	vk.QueuePresentKHR(r.present_queue, &present)
+
+	r.current_frame = (frame + 1) % MAX_FRAMES_IN_FLIGHT
+}
+
 create_instance :: proc(r: ^Renderer) -> bool {
 	app_info := vk.ApplicationInfo{
 		sType              = .APPLICATION_INFO,
@@ -106,16 +174,13 @@ create_instance :: proc(r: ^Renderer) -> bool {
 		engineVersion      = vk.MAKE_VERSION(1, 0, 0),
 		apiVersion         = vk.API_VERSION_1_2,
 	}
-
 	exts := glfw.GetRequiredInstanceExtensions()
-
 	info := vk.InstanceCreateInfo{
 		sType                   = .INSTANCE_CREATE_INFO,
 		pApplicationInfo        = &app_info,
 		enabledExtensionCount   = u32(len(exts)),
 		ppEnabledExtensionNames = raw_data(exts),
 	}
-
 	return vk_check(vk.CreateInstance(&info, nil, &r.instance), "CreateInstance")
 }
 
@@ -302,13 +367,7 @@ create_image_views :: proc(r: ^Renderer) -> bool {
 			viewType = .D2,
 			format   = r.swapchain_format,
 			components = {.IDENTITY, .IDENTITY, .IDENTITY, .IDENTITY},
-			subresourceRange = {
-				aspectMask     = {.COLOR},
-				baseMipLevel   = 0,
-				levelCount     = 1,
-				baseArrayLayer = 0,
-				layerCount     = 1,
-			},
+			subresourceRange = {aspectMask = {.COLOR}, levelCount = 1, layerCount = 1},
 		}
 		if !vk_check(vk.CreateImageView(r.device, &info, nil, &r.swapchain_views[i]), "CreateImageView") do return false
 	}
@@ -361,95 +420,6 @@ create_shader_module :: proc(device: vk.Device, code: []u8) -> (vk.ShaderModule,
 	mod: vk.ShaderModule
 	if !vk_check(vk.CreateShaderModule(device, &info, nil, &mod), "CreateShaderModule") do return 0, false
 	return mod, true
-}
-
-create_pipeline :: proc(r: ^Renderer) -> bool {
-	vert_mod, ok1 := create_shader_module(r.device, VERT_SPV)
-	if !ok1 do return false
-	defer vk.DestroyShaderModule(r.device, vert_mod, nil)
-	frag_mod, ok2 := create_shader_module(r.device, FRAG_SPV)
-	if !ok2 do return false
-	defer vk.DestroyShaderModule(r.device, frag_mod, nil)
-
-	stages := [2]vk.PipelineShaderStageCreateInfo{
-		{
-			sType  = .PIPELINE_SHADER_STAGE_CREATE_INFO,
-			stage  = {.VERTEX},
-			module = vert_mod,
-			pName  = "main",
-		},
-		{
-			sType  = .PIPELINE_SHADER_STAGE_CREATE_INFO,
-			stage  = {.FRAGMENT},
-			module = frag_mod,
-			pName  = "main",
-		},
-	}
-
-	vertex_input := vk.PipelineVertexInputStateCreateInfo{
-		sType = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-	}
-	input_assembly := vk.PipelineInputAssemblyStateCreateInfo{
-		sType    = .PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-		topology = .TRIANGLE_LIST,
-	}
-
-	dynamic_states := [2]vk.DynamicState{.VIEWPORT, .SCISSOR}
-	dynamic_state := vk.PipelineDynamicStateCreateInfo{
-		sType             = .PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-		dynamicStateCount = 2,
-		pDynamicStates    = raw_data(dynamic_states[:]),
-	}
-
-	viewport_state := vk.PipelineViewportStateCreateInfo{
-		sType         = .PIPELINE_VIEWPORT_STATE_CREATE_INFO,
-		viewportCount = 1,
-		scissorCount  = 1,
-	}
-
-	rasterizer := vk.PipelineRasterizationStateCreateInfo{
-		sType       = .PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-		polygonMode = .FILL,
-		cullMode    = {.BACK},
-		frontFace   = .CLOCKWISE,
-		lineWidth   = 1.0,
-	}
-
-	multisampling := vk.PipelineMultisampleStateCreateInfo{
-		sType                = .PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-		rasterizationSamples = {._1},
-		minSampleShading     = 1.0,
-	}
-
-	color_blend_attach := vk.PipelineColorBlendAttachmentState{
-		colorWriteMask = {.R, .G, .B, .A},
-		blendEnable    = false,
-	}
-	color_blend := vk.PipelineColorBlendStateCreateInfo{
-		sType           = .PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-		attachmentCount = 1,
-		pAttachments    = &color_blend_attach,
-	}
-
-	layout_info := vk.PipelineLayoutCreateInfo{sType = .PIPELINE_LAYOUT_CREATE_INFO}
-	if !vk_check(vk.CreatePipelineLayout(r.device, &layout_info, nil, &r.pipeline_layout), "CreatePipelineLayout") do return false
-
-	info := vk.GraphicsPipelineCreateInfo{
-		sType               = .GRAPHICS_PIPELINE_CREATE_INFO,
-		stageCount          = 2,
-		pStages             = raw_data(stages[:]),
-		pVertexInputState   = &vertex_input,
-		pInputAssemblyState = &input_assembly,
-		pViewportState      = &viewport_state,
-		pRasterizationState = &rasterizer,
-		pMultisampleState   = &multisampling,
-		pColorBlendState    = &color_blend,
-		pDynamicState       = &dynamic_state,
-		layout              = r.pipeline_layout,
-		renderPass          = r.render_pass,
-		subpass             = 0,
-	}
-	return vk_check(vk.CreateGraphicsPipelines(r.device, 0, 1, &info, nil, &r.pipeline), "CreateGraphicsPipelines")
 }
 
 create_framebuffers :: proc(r: ^Renderer) -> bool {
@@ -603,12 +573,8 @@ upload_image :: proc(r: ^Renderer, image: vk.Image, w, h: u32, pixels: []u8) -> 
 	vk.CmdPipelineBarrier(cb, {.TOP_OF_PIPE}, {.TRANSFER}, {}, 0, nil, 0, nil, 1, &to_dst)
 
 	region := vk.BufferImageCopy{
-		bufferOffset      = 0,
-		bufferRowLength   = 0,
-		bufferImageHeight = 0,
-		imageSubresource  = {aspectMask = {.COLOR}, mipLevel = 0, baseArrayLayer = 0, layerCount = 1},
-		imageOffset       = {0, 0, 0},
-		imageExtent       = {w, h, 1},
+		imageSubresource = {aspectMask = {.COLOR}, layerCount = 1},
+		imageExtent      = {w, h, 1},
 	}
 	vk.CmdCopyBufferToImage(cb, staging, image, .TRANSFER_DST_OPTIMAL, 1, &region)
 
@@ -668,81 +634,4 @@ create_sync_objects :: proc(r: ^Renderer) -> bool {
 		if !vk_check(vk.CreateFence(r.device, &fence_info, nil, &r.in_flight_fences[i]), "CreateFence") do return false
 	}
 	return true
-}
-
-record_command_buffer :: proc(r: ^Renderer, cb: vk.CommandBuffer, image_index: u32) {
-	begin := vk.CommandBufferBeginInfo{sType = .COMMAND_BUFFER_BEGIN_INFO}
-	vk.BeginCommandBuffer(cb, &begin)
-
-	clear := vk.ClearValue{color = {float32 = {0.01, 0.01, 0.02, 1.0}}}
-	rp_begin := vk.RenderPassBeginInfo{
-		sType           = .RENDER_PASS_BEGIN_INFO,
-		renderPass      = r.render_pass,
-		framebuffer     = r.framebuffers[image_index],
-		renderArea      = {extent = r.swapchain_extent},
-		clearValueCount = 1,
-		pClearValues    = &clear,
-	}
-	vk.CmdBeginRenderPass(cb, &rp_begin, .INLINE)
-	vk.CmdBindPipeline(cb, .GRAPHICS, r.pipeline)
-
-	viewport := vk.Viewport{
-		x        = 0,
-		y        = 0,
-		width    = f32(r.swapchain_extent.width),
-		height   = f32(r.swapchain_extent.height),
-		minDepth = 0,
-		maxDepth = 1,
-	}
-	vk.CmdSetViewport(cb, 0, 1, &viewport)
-	scissor := vk.Rect2D{extent = r.swapchain_extent}
-	vk.CmdSetScissor(cb, 0, 1, &scissor)
-
-	vk.CmdDraw(cb, 3, 1, 0, 0)
-
-	text_record(r, cb, r.current_frame)
-
-	vk.CmdEndRenderPass(cb)
-	vk.EndCommandBuffer(cb)
-}
-
-renderer_draw :: proc(r: ^Renderer) {
-	frame := r.current_frame
-	vk.WaitForFences(r.device, 1, &r.in_flight_fences[frame], true, max(u64))
-
-	image_index: u32
-	acq := vk.AcquireNextImageKHR(r.device, r.swapchain, max(u64), r.image_avail_sems[frame], 0, &image_index)
-	if acq != .SUCCESS && acq != .SUBOPTIMAL_KHR {
-		fmt.eprintfln("AcquireNextImageKHR: %v", acq)
-		return
-	}
-
-	vk.ResetFences(r.device, 1, &r.in_flight_fences[frame])
-	vk.ResetCommandBuffer(r.command_buffers[frame], {})
-	record_command_buffer(r, r.command_buffers[frame], image_index)
-
-	wait_stage := vk.PipelineStageFlags{.COLOR_ATTACHMENT_OUTPUT}
-	submit := vk.SubmitInfo{
-		sType                = .SUBMIT_INFO,
-		waitSemaphoreCount   = 1,
-		pWaitSemaphores      = &r.image_avail_sems[frame],
-		pWaitDstStageMask    = &wait_stage,
-		commandBufferCount   = 1,
-		pCommandBuffers      = &r.command_buffers[frame],
-		signalSemaphoreCount = 1,
-		pSignalSemaphores    = &r.render_done_sems[frame],
-	}
-	vk.QueueSubmit(r.graphics_queue, 1, &submit, r.in_flight_fences[frame])
-
-	present := vk.PresentInfoKHR{
-		sType              = .PRESENT_INFO_KHR,
-		waitSemaphoreCount = 1,
-		pWaitSemaphores    = &r.render_done_sems[frame],
-		swapchainCount     = 1,
-		pSwapchains        = &r.swapchain,
-		pImageIndices      = &image_index,
-	}
-	vk.QueuePresentKHR(r.present_queue, &present)
-
-	r.current_frame = (frame + 1) % MAX_FRAMES_IN_FLIGHT
 }

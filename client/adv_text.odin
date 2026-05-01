@@ -6,7 +6,7 @@ import "core:os"
 import tt "vendor:stb/truetype"
 import vk "vendor:vulkan"
 
-FONT_PATH       :: "res/fonts/m6x11.ttf"
+FONT_PATH       :: "res/fonts/SUSEMono-Regular.ttf"
 FONT_PIXEL_SIZE :: 32.0
 FONT_FIRST_CHAR :: 32
 FONT_NUM_CHARS  :: 95
@@ -18,14 +18,13 @@ TEXT_VERT_SPV := #load("shaders/text.vert.spv")
 TEXT_FRAG_SPV := #load("shaders/text.frag.spv")
 
 Text_Vert :: struct {
-	pos: [2]f32,
-	uv:  [2]f32,
+	pos:   [2]f32,
+	uv:    [2]f32,
+	color: [4]f32,
 }
 
 Text_PC :: struct #packed {
 	screen: [2]f32,
-	_pad:   [2]f32,
-	color:  [4]f32,
 }
 
 Text_Frame_Buffer :: struct {
@@ -51,16 +50,12 @@ Text_Renderer :: struct {
 	frames:          [MAX_FRAMES_IN_FLIGHT]Text_Frame_Buffer,
 
 	cpu_verts:       [dynamic]Text_Vert,
-	color:           [4]f32,
 }
 
-text_init :: proc(r: ^Renderer) -> bool {
-	t := &r.text
-	t.color = {1, 1, 1, 1}
-
-	if !text_bake_atlas(r) do return false
-	if !text_create_descriptors(r) do return false
-	if !text_create_pipeline(r) do return false
+text_init :: proc(t: ^Text_Renderer, r: ^Renderer) -> bool {
+	if !text_bake_atlas(t, r) do return false
+	if !text_create_descriptors(t, r) do return false
+	if !text_create_pipeline(t, r) do return false
 	for i in 0 ..< MAX_FRAMES_IN_FLIGHT {
 		ok := create_buffer(
 			r,
@@ -76,8 +71,7 @@ text_init :: proc(r: ^Renderer) -> bool {
 	return true
 }
 
-text_shutdown :: proc(r: ^Renderer) {
-	t := &r.text
+text_shutdown :: proc(t: ^Text_Renderer, r: ^Renderer) {
 	for i in 0 ..< MAX_FRAMES_IN_FLIGHT {
 		if t.frames[i].vbuf != 0 do vk.DestroyBuffer(r.device, t.frames[i].vbuf, nil)
 		if t.frames[i].memory != 0 do vk.FreeMemory(r.device, t.frames[i].memory, nil)
@@ -93,9 +87,7 @@ text_shutdown :: proc(r: ^Renderer) {
 	delete(t.cpu_verts)
 }
 
-text_bake_atlas :: proc(r: ^Renderer) -> bool {
-	t := &r.text
-
+text_bake_atlas :: proc(t: ^Text_Renderer, r: ^Renderer) -> bool {
 	font_data, ok := os.read_entire_file(FONT_PATH)
 	if !ok {
 		fmt.eprintfln("failed to read font: %s", FONT_PATH)
@@ -107,14 +99,9 @@ text_bake_atlas :: proc(r: ^Renderer) -> bool {
 	defer delete(pixels)
 
 	res := tt.BakeFontBitmap(
-		raw_data(font_data),
-		0,
-		FONT_PIXEL_SIZE,
-		raw_data(pixels),
-		ATLAS_W,
-		ATLAS_H,
-		FONT_FIRST_CHAR,
-		FONT_NUM_CHARS,
+		raw_data(font_data), 0, FONT_PIXEL_SIZE,
+		raw_data(pixels), ATLAS_W, ATLAS_H,
+		FONT_FIRST_CHAR, FONT_NUM_CHARS,
 		raw_data(t.chardata[:]),
 	)
 	if res == 0 {
@@ -123,18 +110,9 @@ text_bake_atlas :: proc(r: ^Renderer) -> bool {
 	}
 
 	{
-		ok := create_image_2d(
-			r,
-			ATLAS_W,
-			ATLAS_H,
-			.R8_UNORM,
-			{.TRANSFER_DST, .SAMPLED},
-			&t.atlas_image,
-			&t.atlas_memory,
-		)
-		if !ok do return false
+		ok2 := create_image_2d(r, ATLAS_W, ATLAS_H, .R8_UNORM, {.TRANSFER_DST, .SAMPLED}, &t.atlas_image, &t.atlas_memory)
+		if !ok2 do return false
 	}
-
 	upload_image(r, t.atlas_image, ATLAS_W, ATLAS_H, pixels) or_return
 
 	view_info := vk.ImageViewCreateInfo{
@@ -155,16 +133,12 @@ text_bake_atlas :: proc(r: ^Renderer) -> bool {
 		addressModeU = .CLAMP_TO_EDGE,
 		addressModeV = .CLAMP_TO_EDGE,
 		addressModeW = .CLAMP_TO_EDGE,
-		minLod       = 0,
-		maxLod       = 0,
 		borderColor  = .INT_OPAQUE_BLACK,
 	}
-	if !vk_check(vk.CreateSampler(r.device, &samp, nil, &t.atlas_sampler), "atlas Sampler") do return false
-	return true
+	return vk_check(vk.CreateSampler(r.device, &samp, nil, &t.atlas_sampler), "atlas Sampler")
 }
 
-text_create_descriptors :: proc(r: ^Renderer) -> bool {
-	t := &r.text
+text_create_descriptors :: proc(t: ^Text_Renderer, r: ^Renderer) -> bool {
 	binding := vk.DescriptorSetLayoutBinding{
 		binding         = 0,
 		descriptorType  = .COMBINED_IMAGE_SAMPLER,
@@ -212,9 +186,7 @@ text_create_descriptors :: proc(r: ^Renderer) -> bool {
 	return true
 }
 
-text_create_pipeline :: proc(r: ^Renderer) -> bool {
-	t := &r.text
-
+text_create_pipeline :: proc(t: ^Text_Renderer, r: ^Renderer) -> bool {
 	vert_mod, ok1 := create_shader_module(r.device, TEXT_VERT_SPV)
 	if !ok1 do return false
 	defer vk.DestroyShaderModule(r.device, vert_mod, nil)
@@ -228,15 +200,16 @@ text_create_pipeline :: proc(r: ^Renderer) -> bool {
 	}
 
 	binding := vk.VertexInputBindingDescription{binding = 0, stride = size_of(Text_Vert), inputRate = .VERTEX}
-	attrs := [2]vk.VertexInputAttributeDescription{
-		{location = 0, binding = 0, format = .R32G32_SFLOAT, offset = u32(offset_of(Text_Vert, pos))},
-		{location = 1, binding = 0, format = .R32G32_SFLOAT, offset = u32(offset_of(Text_Vert, uv))},
+	attrs := [3]vk.VertexInputAttributeDescription{
+		{location = 0, binding = 0, format = .R32G32_SFLOAT,       offset = u32(offset_of(Text_Vert, pos))},
+		{location = 1, binding = 0, format = .R32G32_SFLOAT,       offset = u32(offset_of(Text_Vert, uv))},
+		{location = 2, binding = 0, format = .R32G32B32A32_SFLOAT, offset = u32(offset_of(Text_Vert, color))},
 	}
 	vertex_input := vk.PipelineVertexInputStateCreateInfo{
 		sType                           = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
 		vertexBindingDescriptionCount   = 1,
 		pVertexBindingDescriptions      = &binding,
-		vertexAttributeDescriptionCount = 2,
+		vertexAttributeDescriptionCount = 3,
 		pVertexAttributeDescriptions    = raw_data(attrs[:]),
 	}
 	input_assembly := vk.PipelineInputAssemblyStateCreateInfo{
@@ -283,7 +256,7 @@ text_create_pipeline :: proc(r: ^Renderer) -> bool {
 	}
 
 	pc_range := vk.PushConstantRange{
-		stageFlags = {.VERTEX, .FRAGMENT},
+		stageFlags = {.VERTEX},
 		offset     = 0,
 		size       = size_of(Text_PC),
 	}
@@ -314,38 +287,24 @@ text_create_pipeline :: proc(r: ^Renderer) -> bool {
 	return vk_check(vk.CreateGraphicsPipelines(r.device, 0, 1, &info, nil, &t.pipeline), "text GraphicsPipeline")
 }
 
-renderer_set_text_color :: proc(r: ^Renderer, color: [4]f32) {
-	r.text.color = color
-}
-
-renderer_draw_text :: proc(r: ^Renderer, x, y: f32, s: string) {
-	t := &r.text
+text_push :: proc(t: ^Text_Renderer, x, y: f32, s: string, color: [4]f32) {
 	xpos := x
 	ypos := y
 	for ch in s {
 		if int(ch) < FONT_FIRST_CHAR || int(ch) >= FONT_FIRST_CHAR + FONT_NUM_CHARS do continue
 		q: tt.aligned_quad
 		idx := i32(int(ch) - FONT_FIRST_CHAR)
-		tt.GetBakedQuad(
-			&t.chardata[0],
-			ATLAS_W,
-			ATLAS_H,
-			idx,
-			&xpos,
-			&ypos,
-			&q,
-			true,
-		)
-		v0 := Text_Vert{pos = {q.x0, q.y0}, uv = {q.s0, q.t0}}
-		v1 := Text_Vert{pos = {q.x1, q.y0}, uv = {q.s1, q.t0}}
-		v2 := Text_Vert{pos = {q.x1, q.y1}, uv = {q.s1, q.t1}}
-		v3 := Text_Vert{pos = {q.x0, q.y1}, uv = {q.s0, q.t1}}
+		tt.GetBakedQuad(&t.chardata[0], ATLAS_W, ATLAS_H, idx, &xpos, &ypos, &q, true)
+		v0 := Text_Vert{pos = {q.x0, q.y0}, uv = {q.s0, q.t0}, color = color}
+		v1 := Text_Vert{pos = {q.x1, q.y0}, uv = {q.s1, q.t0}, color = color}
+		v2 := Text_Vert{pos = {q.x1, q.y1}, uv = {q.s1, q.t1}, color = color}
+		v3 := Text_Vert{pos = {q.x0, q.y1}, uv = {q.s0, q.t1}, color = color}
 		append(&t.cpu_verts, v0, v1, v2, v0, v2, v3)
 	}
 }
 
-text_record :: proc(r: ^Renderer, cb: vk.CommandBuffer, frame: u32) {
-	t := &r.text
+text_record :: proc(t: ^Text_Renderer, r: ^Renderer, cb: vk.CommandBuffer) {
+	frame := r.current_frame
 	count := len(t.cpu_verts)
 	if count == 0 do return
 	if count > MAX_TEXT_VERTS do count = MAX_TEXT_VERTS
@@ -353,13 +312,10 @@ text_record :: proc(r: ^Renderer, cb: vk.CommandBuffer, frame: u32) {
 	dst := ([^]Text_Vert)(t.frames[frame].mapped)
 	for i in 0 ..< count do dst[i] = t.cpu_verts[i]
 
-	pc := Text_PC{
-		screen = {f32(r.swapchain_extent.width), f32(r.swapchain_extent.height)},
-		color  = t.color,
-	}
+	pc := Text_PC{screen = {f32(r.swapchain_extent.width), f32(r.swapchain_extent.height)}}
 	vk.CmdBindPipeline(cb, .GRAPHICS, t.pipeline)
 	vk.CmdBindDescriptorSets(cb, .GRAPHICS, t.pipeline_layout, 0, 1, &t.desc_set, 0, nil)
-	vk.CmdPushConstants(cb, t.pipeline_layout, {.VERTEX, .FRAGMENT}, 0, size_of(Text_PC), &pc)
+	vk.CmdPushConstants(cb, t.pipeline_layout, {.VERTEX}, 0, size_of(Text_PC), &pc)
 
 	offset := vk.DeviceSize(0)
 	vbuf := t.frames[frame].vbuf

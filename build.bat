@@ -1,9 +1,9 @@
 @echo off
 
 rem compile shaders
-"%VULKAN_SDK%\Bin\glslc.exe" client/shaders/triangle.vert -o client/shaders/triangle.vert.spv
+"%VULKAN_SDK%\Bin\glslc.exe" client/shaders/shapes.vert -o client/shaders/shapes.vert.spv
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
-"%VULKAN_SDK%\Bin\glslc.exe" client/shaders/triangle.frag -o client/shaders/triangle.frag.spv
+"%VULKAN_SDK%\Bin\glslc.exe" client/shaders/shapes.frag -o client/shaders/shapes.frag.spv
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 "%VULKAN_SDK%\Bin\glslc.exe" client/shaders/text.vert -o client/shaders/text.vert.spv
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
