@@ -40,6 +40,12 @@ main :: proc() {
 	ui: UI
 	ui_init(&ui, window)
 	defer ui_shutdown(&ui)
+
+	input: Input
+	input_init(&input, window)
+
+	cam := Camera{pos = {0, 0}, zoom = 1}
+
 	clicks := 0
 
 	monitor := glfw.GetPrimaryMonitor()
@@ -73,13 +79,43 @@ main :: proc() {
 			fps_frames = 0
 		}
 
+		input_update(&input)
 		glfw.PollEvents()
 		ui_update(&ui, window)
 
-		if !gfx_begin(&g) do continue
-
 		sw := f32(r.swapchain_extent.width)
 		sh := f32(r.swapchain_extent.height)
+
+		dt := f32(frame_dt)
+		PAN_SPEED :: f32(400)
+		pan: [2]f32
+		if input_is_down(&input, glfw.KEY_W) do pan.y -= 1
+		if input_is_down(&input, glfw.KEY_S) do pan.y += 1
+		if input_is_down(&input, glfw.KEY_A) do pan.x -= 1
+		if input_is_down(&input, glfw.KEY_D) do pan.x += 1
+		if pan.x != 0 || pan.y != 0 {
+			cam.pos += pan * (PAN_SPEED * dt / cam.zoom)
+		}
+
+		if ui.scroll_dy != 0 {
+			before := camera_screen_to_world(&cam, ui.mouse, sw, sh)
+			zoom_factor := f32(1) + ui.scroll_dy * 0.1
+			cam.zoom *= zoom_factor
+			if cam.zoom < 0.1 do cam.zoom = 0.1
+			if cam.zoom > 8   do cam.zoom = 8
+			after := camera_screen_to_world(&cam, ui.mouse, sw, sh)
+			cam.pos += before - after
+		}
+
+		if !gfx_begin(&g) do continue
+
+		gfx_set_camera(&g, &cam)
+		draw_rect(&g, -64, -64, 128, 128, {0.45, 0.55, 0.85, 1})
+		draw_rect(&g, -4, -4, 8, 8, {1, 1, 1, 1})
+		draw_line(&g, -200, 0, 200, 0, 1, {1, 0.4, 0.4, 0.6})
+		draw_line(&g, 0, -200, 0, 200, 1, {0.4, 1, 0.4, 0.6})
+
+		gfx_clear_camera(&g)
 
 		bw, bh := f32(240), f32(72)
 		bx := (sw - bw) * 0.5
@@ -93,7 +129,7 @@ main :: proc() {
 		tw := text_measure(&g.text, label)
 		draw_text(&g, (sw - tw) * 0.5, by - 24, label, {0.8, 0.9, 1.0, 1})
 
-		stats := fmt.tprintf("fps %.0f  %.2fms  refresh %dHz", fps, frame_ms, refresh_hz)
+		stats := fmt.tprintf("fps %.0f  %.2fms  refresh %dHz  zoom %.2f  pos (%.0f, %.0f)", fps, frame_ms, refresh_hz, cam.zoom, cam.pos.x, cam.pos.y)
 		draw_text(&g, 8, 8 + FONT_PIXEL_SIZE, stats, {0.7, 0.95, 0.7, 1})
 
 		gfx_end(&g)

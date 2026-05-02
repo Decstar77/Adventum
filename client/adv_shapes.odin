@@ -23,7 +23,9 @@ Shape_Vert :: struct {
 }
 
 Shape_PC :: struct #packed {
-	screen: [2]f32,
+	screen:      [2]f32,
+	view_scale:  [2]f32,
+	view_offset: [2]f32,
 }
 
 Shape_Frame_Buffer :: struct {
@@ -33,17 +35,21 @@ Shape_Frame_Buffer :: struct {
 }
 
 Shape_Batch :: struct {
-	count:   u32,
-	scissor: [4]i32,
+	count:       u32,
+	scissor:     [4]i32,
+	view_scale:  [2]f32,
+	view_offset: [2]f32,
 }
 
 Shape_Renderer :: struct {
-	pipeline_layout: vk.PipelineLayout,
-	pipeline:        vk.Pipeline,
-	frames:          [MAX_FRAMES_IN_FLIGHT]Shape_Frame_Buffer,
-	cpu_verts:       [dynamic]Shape_Vert,
-	batches:         [dynamic]Shape_Batch,
-	current_scissor: [4]i32,
+	pipeline_layout:     vk.PipelineLayout,
+	pipeline:            vk.Pipeline,
+	frames:              [MAX_FRAMES_IN_FLIGHT]Shape_Frame_Buffer,
+	cpu_verts:           [dynamic]Shape_Vert,
+	batches:             [dynamic]Shape_Batch,
+	current_scissor:     [4]i32,
+	current_view_scale:  [2]f32,
+	current_view_offset: [2]f32,
 }
 
 shapes_init :: proc(s: ^Shape_Renderer, r: ^Renderer) -> bool {
@@ -78,11 +84,24 @@ shapes_set_scissor :: proc(s: ^Shape_Renderer, scissor: [4]i32) {
 	s.current_scissor = scissor
 }
 
+shapes_set_view :: proc(s: ^Shape_Renderer, scale, offset: [2]f32) {
+	s.current_view_scale = scale
+	s.current_view_offset = offset
+}
+
 @(private="file")
 shapes_active_batch :: proc(s: ^Shape_Renderer) -> ^Shape_Batch {
 	n := len(s.batches)
-	if n == 0 || s.batches[n-1].scissor != s.current_scissor {
-		append(&s.batches, Shape_Batch{count = 0, scissor = s.current_scissor})
+	if n == 0 ||
+	   s.batches[n-1].scissor     != s.current_scissor ||
+	   s.batches[n-1].view_scale  != s.current_view_scale ||
+	   s.batches[n-1].view_offset != s.current_view_offset {
+		append(&s.batches, Shape_Batch{
+			count       = 0,
+			scissor     = s.current_scissor,
+			view_scale  = s.current_view_scale,
+			view_offset = s.current_view_offset,
+		})
 		n = len(s.batches)
 	}
 	return &s.batches[n-1]
@@ -274,9 +293,8 @@ shapes_record :: proc(s: ^Shape_Renderer, r: ^Renderer, cb: vk.CommandBuffer) {
 	dst := ([^]Shape_Vert)(s.frames[frame].mapped)
 	for i in 0 ..< count do dst[i] = s.cpu_verts[i]
 
-	pc := Shape_PC{screen = {f32(r.swapchain_extent.width), f32(r.swapchain_extent.height)}}
+	screen := [2]f32{f32(r.swapchain_extent.width), f32(r.swapchain_extent.height)}
 	vk.CmdBindPipeline(cb, .GRAPHICS, s.pipeline)
-	vk.CmdPushConstants(cb, s.pipeline_layout, {.VERTEX}, 0, size_of(Shape_PC), &pc)
 
 	offset := vk.DeviceSize(0)
 	vbuf := s.frames[frame].vbuf
@@ -292,6 +310,12 @@ shapes_record :: proc(s: ^Shape_Renderer, r: ^Renderer, cb: vk.CommandBuffer) {
 		sh := batch.scissor[3]; if sh < 0 do sh = 0
 		rect := vk.Rect2D{offset = {batch.scissor[0], batch.scissor[1]}, extent = {u32(sw), u32(sh)}}
 		vk.CmdSetScissor(cb, 0, 1, &rect)
+		pc := Shape_PC{
+			screen      = screen,
+			view_scale  = batch.view_scale,
+			view_offset = batch.view_offset,
+		}
+		vk.CmdPushConstants(cb, s.pipeline_layout, {.VERTEX}, 0, size_of(Shape_PC), &pc)
 		vk.CmdDraw(cb, draw, 1, first, 0)
 		first += draw
 		remaining -= draw

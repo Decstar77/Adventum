@@ -13,10 +13,13 @@ layout(location = 3) flat out float v_type;
 
 layout(push_constant) uniform PC {
     vec2 screen;
+    vec2 view_scale;
+    vec2 view_offset;
 } pc;
 
 void main() {
-    vec2 ndc = (in_pos / pc.screen) * 2.0 - 1.0;
+    vec2 screen_pos = in_pos * pc.view_scale + pc.view_offset;
+    vec2 ndc = (screen_pos / pc.screen) * 2.0 - 1.0;
     gl_Position = vec4(ndc, 0.0, 1.0);
     v_local  = in_local;
     v_params = in_params;

@@ -38,8 +38,21 @@ gfx_begin :: proc(g: ^Graphics) -> bool {
 	}
 	append(&g.scissor_stack, full)
 	shapes_set_scissor(&g.shapes, full)
+	shapes_set_view(&g.shapes, {1, 1}, {0, 0})
 	text_set_scissor(&g.text, full)
 	return true
+}
+
+gfx_set_camera :: proc(g: ^Graphics, cam: ^Camera) {
+	sw := f32(g.renderer.swapchain_extent.width)
+	sh := f32(g.renderer.swapchain_extent.height)
+	scale := [2]f32{cam.zoom, cam.zoom}
+	offset := [2]f32{sw * 0.5 - cam.pos.x * cam.zoom, sh * 0.5 - cam.pos.y * cam.zoom}
+	shapes_set_view(&g.shapes, scale, offset)
+}
+
+gfx_clear_camera :: proc(g: ^Graphics) {
+	shapes_set_view(&g.shapes, {1, 1}, {0, 0})
 }
 
 gfx_end :: proc(g: ^Graphics) {
