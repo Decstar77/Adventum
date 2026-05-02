@@ -1,5 +1,7 @@
 package main
 
+import "core:math"
+
 Tile_Kind :: enum {
 	Core,
 	Farm,
@@ -20,6 +22,7 @@ Tile :: struct {
 	hp:        f32,
 	energized: bool,
 	cooldown:  f32,
+	aim_angle: f32, // turret barrel angle in radians (atan2 convention)
 }
 
 World :: struct {
@@ -89,7 +92,11 @@ world_can_place :: proc(w: ^World, c: Hex_Coord, kind: Tile_Kind) -> bool {
 world_place :: proc(w: ^World, c: Hex_Coord, kind: Tile_Kind) -> bool {
 	if !world_can_place(w, c, kind) do return false
 	w.food -= tile_cost(kind)
-	w.tiles[c] = Tile{kind = kind, hp = tile_max_hp(kind)}
+	tile := Tile{kind = kind, hp = tile_max_hp(kind)}
+	if kind == .Turret {
+		tile.aim_angle = -math.PI * 0.5 // start pointing up
+	}
+	w.tiles[c] = tile
 	w.path_dirty = true
 	return true
 }
@@ -211,13 +218,13 @@ tile_color :: proc(kind: Tile_Kind) -> (fill, stroke: [4]f32) {
 }
 
 @(private="file")
-draw_tile_marker :: proc(g: ^Graphics, c: Hex_Coord, kind: Tile_Kind, alpha: f32) {
+draw_tile_marker :: proc(g: ^Graphics, c: Hex_Coord, tile: Tile, alpha: f32) {
 	center := hex_to_pixel(c)
 	cx, cy := center.x, center.y
-	_, stroke := tile_color(kind)
+	_, stroke := tile_color(tile.kind)
 	stroke.a *= alpha
 
-	switch kind {
+	switch tile.kind {
 	case .Core:
 		draw_circle(g, cx, cy, 10, stroke)
 
@@ -235,8 +242,11 @@ draw_tile_marker :: proc(g: ^Graphics, c: Hex_Coord, kind: Tile_Kind, alpha: f32
 
 	case .Turret:
 		hot := [4]f32{0.886, 0.294, 0.290, alpha}
-		draw_circle(g, cx, cy + 2, 8, hot)
-		draw_rect(g, cx - 2, cy - 14, 4, 12, stroke)
+		draw_circle(g, cx, cy, 8, hot)
+		barrel_len := f32(15)
+		bx := cx + math.cos(tile.aim_angle) * barrel_len
+		by := cy + math.sin(tile.aim_angle) * barrel_len
+		draw_line(g, cx, cy, bx, by, 4, stroke)
 
 	case .Wall:
 		mid := [4]f32{0.533, 0.529, 0.502, alpha}
@@ -247,7 +257,7 @@ draw_tile_marker :: proc(g: ^Graphics, c: Hex_Coord, kind: Tile_Kind, alpha: f32
 	case .Relay:
 		ring_outer := [4]f32{0.365, 0.792, 0.647, alpha}
 		ring_inner := [4]f32{0.114, 0.620, 0.459, alpha}
-		fill, _ := tile_color(kind)
+		fill, _ := tile_color(tile.kind)
 		draw_circle(g, cx, cy, 10, ring_outer)
 		draw_circle(g, cx, cy,  7, fill)
 		draw_circle(g, cx, cy,  4, ring_inner)
@@ -263,7 +273,7 @@ world_render :: proc(w: ^World, g: ^Graphics) {
 		}
 		stroke.a *= alpha
 		draw_hex_outline(g, coord, 2, stroke)
-		draw_tile_marker(g, coord, tile.kind, alpha)
+		draw_tile_marker(g, coord, tile, alpha)
 	}
 }
 

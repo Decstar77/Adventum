@@ -273,10 +273,9 @@ main :: proc() {
 
 		// Big timer at top-center.
 		timer_str := fmt.tprintf("%.1fs", world.survive_time)
-		TIMER_SCALE :: f32(2.25)
-		tw_timer := text_measure(&g.text, timer_str, TIMER_SCALE)
-		timer_y := f32(16) + FONT_PIXEL_SIZE * TIMER_SCALE
-		draw_text(&g, (sw - tw_timer) * 0.5, timer_y, timer_str, {0.95, 0.95, 0.98, 1}, TIMER_SCALE)
+		tw_timer := text_measure(&g.text, timer_str, .Large)
+		timer_y := f32(16) + font_pixel_size(.Large)
+		draw_text(&g, (sw - tw_timer) * 0.5, timer_y, timer_str, {0.95, 0.95, 0.98, 1}, .Large)
 
 		// Surge countdown directly underneath.
 		if world.waves.surge_active {
@@ -292,13 +291,12 @@ main :: proc() {
 
 		// SURGE WAVE banner — flashes for ~3 seconds when a surge fires.
 		if world.waves.banner_time > 0 {
-			BANNER_SCALE :: f32(2.75)
 			banner_str := fmt.tprintf("SURGE WAVE %d", world.waves.last_surge_num)
-			bw_banner := text_measure(&g.text, banner_str, BANNER_SCALE)
+			bw_banner := text_measure(&g.text, banner_str, .Large)
 			alpha := world.waves.banner_time / WAVE_BANNER_DURATION
 			if alpha > 1 do alpha = 1
 			if alpha < 0 do alpha = 0
-			draw_text(&g, (sw - bw_banner) * 0.5, sh * 0.5, banner_str, {1.00, 0.30, 0.30, alpha}, BANNER_SCALE)
+			draw_text(&g, (sw - bw_banner) * 0.5, sh * 0.5, banner_str, {1.00, 0.30, 0.30, alpha}, .Large)
 		}
 
 		mode_label := mode == .Place ? "PLACE (shift = multi)" : "SELECT"
@@ -311,13 +309,13 @@ main :: proc() {
 			head := "CORE DESTROYED"
 			body := fmt.tprintf("Survived %.1fs   |   Scrap collected: %d", world.survive_time, world.scrap)
 			tip  := "Press R to restart"
-			hw := text_measure(&g.text, head)
+			hw := text_measure(&g.text, head, .Large)
 			bw := text_measure(&g.text, body)
 			tw := text_measure(&g.text, tip)
 			cy := sh * 0.5
-			draw_text(&g, (sw - hw) * 0.5, cy - 28, head, {1.00, 0.82, 0.82, 1})
-			draw_text(&g, (sw - bw) * 0.5, cy + 4,  body, {0.96, 0.96, 0.96, 1})
-			draw_text(&g, (sw - tw) * 0.5, cy + 36, tip,  {0.78, 0.86, 1.00, 1})
+			draw_text(&g, (sw - hw) * 0.5, cy - 28, head, {1.00, 0.82, 0.82, 1}, .Large)
+			draw_text(&g, (sw - bw) * 0.5, cy + 24, body, {0.96, 0.96, 0.96, 1})
+			draw_text(&g, (sw - tw) * 0.5, cy + 56, tip,  {0.78, 0.86, 1.00, 1})
 		}
 
 		gfx_end(&g)

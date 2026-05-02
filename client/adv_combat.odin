@@ -5,9 +5,30 @@ import "core:math"
 TURRET_RANGE_PIXELS  :: f32(280)
 TURRET_FIRE_INTERVAL :: f32(0.9)
 TURRET_DAMAGE        :: f32(8)
+TURRET_ROT_SPEED     :: f32(8.0)            // radians/sec
+TURRET_AIM_TOLERANCE :: f32(0.18)           // ~10 deg
+TURRET_MUZZLE_OFFSET :: f32(15)
 PROJECTILE_SPEED     :: f32(640)
 PROJECTILE_LIFE      :: f32(2.0)
 PROJECTILE_HIT_R     :: f32(12)
+
+@(private="file")
+approach_angle :: proc(current, target, max_step: f32) -> f32 {
+	diff := target - current
+	for diff >  math.PI do diff -= 2 * math.PI
+	for diff < -math.PI do diff += 2 * math.PI
+	if diff >  max_step do diff =  max_step
+	if diff < -max_step do diff = -max_step
+	return current + diff
+}
+
+@(private="file")
+shortest_angle_diff :: proc(a, b: f32) -> f32 {
+	d := b - a
+	for d >  math.PI do d -= 2 * math.PI
+	for d < -math.PI do d += 2 * math.PI
+	return d
+}
 
 Projectile :: struct {
 	pos:  [2]f32,
@@ -44,29 +65,44 @@ turrets_fire :: proc(w: ^World, dt: f32) {
 	for coord, tile in w.tiles {
 		if tile.kind != .Turret do continue
 		t := tile
+
+		origin := hex_to_pixel(coord)
+		idx := nearest_enemy_in_range(w, origin, TURRET_RANGE_PIXELS)
+
+		// Track the nearest in-range enemy with a smooth rotation. With no
+		// target the barrel just holds its last bearing.
+		target_angle := t.aim_angle
+		has_target := idx >= 0
+		if has_target {
+			tp := w.enemies[idx].pos
+			target_angle = math.atan2(tp.y - origin.y, tp.x - origin.x)
+		}
+		t.aim_angle = approach_angle(t.aim_angle, target_angle, TURRET_ROT_SPEED * dt)
+
 		if t.cooldown > 0 {
 			t.cooldown -= dt
 			if t.cooldown < 0 do t.cooldown = 0
 		}
-		if t.energized && t.cooldown <= 0 {
-			origin := hex_to_pixel(coord)
-			idx := nearest_enemy_in_range(w, origin, TURRET_RANGE_PIXELS)
-			if idx >= 0 {
-				target := w.enemies[idx].pos
-				dx := target.x - origin.x
-				dy := target.y - origin.y
-				d := math.sqrt(dx * dx + dy * dy)
-				if d < 0.001 do d = 0.001
-				vel := [2]f32{dx / d * PROJECTILE_SPEED, dy / d * PROJECTILE_SPEED}
+
+		if t.energized && t.cooldown <= 0 && has_target {
+			// Only fire once roughly aimed at the target.
+			if abs(shortest_angle_diff(t.aim_angle, target_angle)) <= TURRET_AIM_TOLERANCE {
+				dx := math.cos(t.aim_angle)
+				dy := math.sin(t.aim_angle)
+				muzzle := [2]f32{
+					origin.x + dx * TURRET_MUZZLE_OFFSET,
+					origin.y + dy * TURRET_MUZZLE_OFFSET,
+				}
 				append(&w.projectiles, Projectile{
-					pos  = origin,
-					vel  = vel,
+					pos  = muzzle,
+					vel  = {dx * PROJECTILE_SPEED, dy * PROJECTILE_SPEED},
 					dmg  = TURRET_DAMAGE,
 					life = PROJECTILE_LIFE,
 				})
 				t.cooldown = TURRET_FIRE_INTERVAL
 			}
 		}
+
 		w.tiles[coord] = t
 	}
 }
