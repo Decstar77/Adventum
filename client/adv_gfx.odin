@@ -99,6 +99,6 @@ draw_line :: proc(g: ^Graphics, ax, ay, bx, by, thickness: f32, color: [4]f32) {
 	shapes_push_line(&g.shapes, ax, ay, bx, by, thickness, color)
 }
 
-draw_text :: proc(g: ^Graphics, x, y: f32, s: string, color: [4]f32 = {1, 1, 1, 1}) {
-	text_push(&g.text, x, y, s, color)
+draw_text :: proc(g: ^Graphics, x, y: f32, s: string, color: [4]f32 = {1, 1, 1, 1}, scale: f32 = 1) {
+	text_push(&g.text, x, y, s, color, scale)
 }

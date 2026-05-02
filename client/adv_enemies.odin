@@ -131,49 +131,58 @@ enemy_spawn :: proc(w: ^World, kind: Enemy_Kind) {
 	append(&w.enemies, Enemy{kind = kind, pos = pos, hp = hp})
 }
 
+ENEMY_ATTACK_RANGE :: f32(36)
+
+@(private="file")
+nearest_tile_to :: proc(w: ^World, from: [2]f32) -> (Hex_Coord, bool) {
+	best_d2 := f32(0)
+	best:    Hex_Coord
+	found := false
+	for coord in w.tiles {
+		center := hex_to_pixel(coord)
+		dx := center.x - from.x
+		dy := center.y - from.y
+		d2 := dx * dx + dy * dy
+		if !found || d2 < best_d2 {
+			best_d2 = d2
+			best    = coord
+			found   = true
+		}
+	}
+	return best, found
+}
+
+// Phase-5 behaviour: every enemy walks straight at its nearest tile and chips it
+// in place. Per-enemy nuance (Brutes preferring walls, Crawlers routing around)
+// will return later via the path-field code retained above.
 enemies_update :: proc(w: ^World, dt: f32) {
 	for i in 0 ..< len(w.enemies) {
 		e := &w.enemies[i]
 		_, speed, dmg := enemy_stats(e.kind)
-		field := enemy_field_for(w, e.kind)
 
-		current_hex := pixel_to_hex(e.pos)
+		target, ok := nearest_tile_to(w, e.pos)
+		if !ok do continue
+		center := hex_to_pixel(target)
+		dx := center.x - e.pos.x
+		dy := center.y - e.pos.y
+		d := math.sqrt(dx * dx + dy * dy)
 
-		// Already standing on the Core: gnaw it directly.
-		if current_hex == w.core {
-			core_tile, ok := w.tiles[w.core]
-			if ok {
-				core_tile.hp -= dmg * dt
-				w.tiles[w.core] = core_tile
-				// Phase 5 will handle game-over when Core HP <= 0.
+		if d <= ENEMY_ATTACK_RANGE {
+			tile, present := w.tiles[target]
+			if present {
+				tile.hp -= dmg * dt
+				if tile.hp <= 0 && tile.kind != .Core {
+					world_remove(w, target)
+				} else {
+					w.tiles[target] = tile
+				}
 			}
 			continue
 		}
 
-		next_hex, has := field.next[current_hex]
-		if !has do continue
-
-		// If the next hex on the path is occupied (and not the Core itself),
-		// stop at the current hex and chip the blocker.
-		if next_hex != w.core {
-			if tile, blocked := w.tiles[next_hex]; blocked {
-				tile.hp -= dmg * dt
-				if tile.hp <= 0 {
-					world_remove(w, next_hex)
-				} else {
-					w.tiles[next_hex] = tile
-				}
-				continue
-			}
-		}
-
-		target := hex_to_pixel(next_hex)
-		dx := target.x - e.pos.x
-		dy := target.y - e.pos.y
-		d := math.sqrt(dx * dx + dy * dy)
 		step := speed * dt
 		if d <= step {
-			e.pos = target
+			e.pos = center
 		} else {
 			e.pos.x += dx / d * step
 			e.pos.y += dy / d * step

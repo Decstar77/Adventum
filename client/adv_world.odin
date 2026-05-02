@@ -19,6 +19,7 @@ Tile :: struct {
 	kind:      Tile_Kind,
 	hp:        f32,
 	energized: bool,
+	cooldown:  f32,
 }
 
 World :: struct {
@@ -27,9 +28,13 @@ World :: struct {
 	food:          f32,
 	scrap:         i32,
 	enemies:       [dynamic]Enemy,
+	projectiles:   [dynamic]Projectile,
 	field_crawler: Path_Field,
 	field_brute:   Path_Field,
 	path_dirty:    bool,
+	survive_time:  f32,
+	game_over:     bool,
+	waves:         Wave_State,
 }
 
 world_init :: proc(w: ^World) {
@@ -37,13 +42,16 @@ world_init :: proc(w: ^World) {
 	w.tiles[w.core] = Tile{kind = .Core, hp = 200, energized = true}
 	w.food = START_FOOD
 	w.path_dirty = true
+	waves_init(&w.waves)
 }
 
 world_shutdown :: proc(w: ^World) {
 	delete(w.tiles)
 	delete(w.enemies)
+	delete(w.projectiles)
 	path_field_destroy(&w.field_crawler)
 	path_field_destroy(&w.field_brute)
+	waves_shutdown(&w.waves)
 }
 
 tile_cost :: proc(kind: Tile_Kind) -> f32 {
@@ -122,6 +130,16 @@ world_count_powered :: proc(w: ^World) -> (powered, total: int) {
 		if tile.energized do powered += 1
 	}
 	return
+}
+
+world_power_remaining :: proc(w: ^World) -> i32 {
+	supply := i32(0)
+	demand := i32(0)
+	for _, tile in w.tiles {
+		if tile.kind == .Generator do supply += i32(GENERATOR_OUTPUT)
+		if tile_consumes_energy(tile.kind) do demand += 1
+	}
+	return supply - demand
 }
 
 @(private="file")
@@ -249,7 +267,12 @@ world_render :: proc(w: ^World, g: ^Graphics) {
 	}
 }
 
-world_render_hover :: proc(w: ^World, g: ^Graphics, hover: Hex_Coord, selected: Tile_Kind) {
+world_render_hover :: proc(w: ^World, g: ^Graphics, hover: Hex_Coord, placing: bool, selected: Tile_Kind) {
+	if !placing {
+		// Selection feedback for Default mode: a faint white outline, regardless of contents.
+		draw_hex_outline(g, hover, 1.5, {1, 1, 1, 0.55})
+		return
+	}
 	if hover in w.tiles {
 		draw_hex_outline(g, hover, 1.5, {1, 1, 1, 0.35})
 		return

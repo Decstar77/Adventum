@@ -309,28 +309,32 @@ text_create_pipeline :: proc(t: ^Text_Renderer, r: ^Renderer) -> bool {
 	return vk_check(vk.CreateGraphicsPipelines(r.device, 0, 1, &info, nil, &t.pipeline), "text GraphicsPipeline")
 }
 
-text_measure :: proc(t: ^Text_Renderer, s: string) -> f32 {
+text_measure :: proc(t: ^Text_Renderer, s: string, scale: f32 = 1) -> f32 {
 	width := f32(0)
 	for ch in s {
 		if int(ch) < FONT_FIRST_CHAR || int(ch) >= FONT_FIRST_CHAR + FONT_NUM_CHARS do continue
 		width += t.chardata[int(ch) - FONT_FIRST_CHAR].xadvance
 	}
-	return width
+	return width * scale
 }
 
-text_push :: proc(t: ^Text_Renderer, x, y: f32, s: string, color: [4]f32) {
-	xpos := x
-	ypos := y
+text_push :: proc(t: ^Text_Renderer, x, y: f32, s: string, color: [4]f32, scale: f32 = 1) {
+	xpos := f32(0)
+	ypos := f32(0)
 	batch := text_active_batch(t)
 	for ch in s {
 		if int(ch) < FONT_FIRST_CHAR || int(ch) >= FONT_FIRST_CHAR + FONT_NUM_CHARS do continue
 		q: tt.aligned_quad
 		idx := i32(int(ch) - FONT_FIRST_CHAR)
 		tt.GetBakedQuad(&t.chardata[0], ATLAS_W, ATLAS_H, idx, &xpos, &ypos, &q, true)
-		v0 := Text_Vert{pos = {q.x0, q.y0}, uv = {q.s0, q.t0}, color = color}
-		v1 := Text_Vert{pos = {q.x1, q.y0}, uv = {q.s1, q.t0}, color = color}
-		v2 := Text_Vert{pos = {q.x1, q.y1}, uv = {q.s1, q.t1}, color = color}
-		v3 := Text_Vert{pos = {q.x0, q.y1}, uv = {q.s0, q.t1}, color = color}
+		x0 := x + q.x0 * scale
+		y0 := y + q.y0 * scale
+		x1 := x + q.x1 * scale
+		y1 := y + q.y1 * scale
+		v0 := Text_Vert{pos = {x0, y0}, uv = {q.s0, q.t0}, color = color}
+		v1 := Text_Vert{pos = {x1, y0}, uv = {q.s1, q.t0}, color = color}
+		v2 := Text_Vert{pos = {x1, y1}, uv = {q.s1, q.t1}, color = color}
+		v3 := Text_Vert{pos = {x0, y1}, uv = {q.s0, q.t1}, color = color}
 		append(&t.cpu_verts, v0, v1, v2, v0, v2, v3)
 		batch.count += 6
 	}

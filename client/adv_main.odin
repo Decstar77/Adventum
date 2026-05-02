@@ -6,6 +6,11 @@ import "core:time"
 import "vendor:glfw"
 import win "core:sys/windows"
 
+Selection_Mode :: enum {
+	Default,
+	Place,
+}
+
 main :: proc() {
 	if !bool(glfw.Init()) {
 		fmt.eprintln("failed to init GLFW")
@@ -50,6 +55,7 @@ main :: proc() {
 	world_init(&world)
 	defer world_shutdown(&world)
 
+	mode          := Selection_Mode.Default
 	selected_kind := Tile_Kind.Farm
 
 	rmb_down     := false
@@ -131,19 +137,49 @@ main :: proc() {
 		for k, i in HOTKEYS {
 			if input_just_pressed(&input, k) {
 				selected_kind = Tile_Kind(i)
+				mode = .Place
 			}
 		}
 
-		if input_just_pressed(&input, glfw.KEY_C) do enemy_spawn(&world, .Crawler)
-		if input_just_pressed(&input, glfw.KEY_B) do enemy_spawn(&world, .Brute)
-
-		tick_accum += frame_dt
-		for tick_accum >= TICK_DT {
-			world_tick(&world, f32(TICK_DT))
-			tick_accum -= TICK_DT
+		if input_just_pressed(&input, glfw.KEY_ESCAPE) {
+			mode = .Default
 		}
 
-		enemies_update(&world, dt)
+		if !world.game_over {
+			if input_just_pressed(&input, glfw.KEY_C) do enemy_spawn(&world, .Crawler)
+			if input_just_pressed(&input, glfw.KEY_B) do enemy_spawn(&world, .Brute)
+		}
+
+		if world.game_over && input_just_pressed(&input, glfw.KEY_R) {
+			world_shutdown(&world)
+			world = World{}
+			world_init(&world)
+			world_tick(&world, 0)
+			cam = Camera{pos = {0, 0}, zoom = 1}
+			selected_kind = .Farm
+			mode = .Default
+			tick_accum = 0
+		}
+
+		if !world.game_over {
+			world.survive_time += dt
+
+			tick_accum += frame_dt
+			for tick_accum >= TICK_DT {
+				world_tick(&world, f32(TICK_DT))
+				tick_accum -= TICK_DT
+			}
+
+			waves_update(&world, &world.waves, dt)
+			turrets_fire(&world, dt)
+			projectiles_update(&world, dt)
+			enemies_update(&world, dt)
+			sweep_dead_enemies(&world)
+
+			if c, ok := world.tiles[world.core]; ok {
+				if c.hp <= 0 do world.game_over = true
+			}
+		}
 
 		// Picker bar layout (used both for hit-test and for drawing later)
 		picker_h    := f32(56)
@@ -160,9 +196,20 @@ main :: proc() {
 		// Place / remove via mouse on the world (suppressed when over the picker bar)
 		lmb_just := ui_mouse_just_pressed(&ui)
 		rmb_just := rmb_down && !rmb_was_down
-		if !mouse_in_picker {
-			if lmb_just do world_place(&world, hover, selected_kind)
-			if rmb_just do world_remove(&world, hover)
+		shift_held := input_is_down(&input, glfw.KEY_LEFT_SHIFT) || input_is_down(&input, glfw.KEY_RIGHT_SHIFT)
+		if !mouse_in_picker && !world.game_over {
+			if lmb_just && mode == .Place {
+				if world_place(&world, hover, selected_kind) {
+					if !shift_held do mode = .Default
+				}
+			}
+			if rmb_just {
+				if mode == .Place {
+					mode = .Default
+				} else {
+					world_remove(&world, hover)
+				}
+			}
 		}
 
 		if !gfx_begin(&g) do continue
@@ -171,7 +218,10 @@ main :: proc() {
 		gfx_set_camera(&g, &cam)
 		world_render(&world, &g)
 		enemies_render(&world, &g)
-		world_render_hover(&world, &g, hover, selected_kind)
+		projectiles_render(&world, &g)
+		if !world.game_over {
+			world_render_hover(&world, &g, hover, mode == .Place, selected_kind)
+		}
 
 		// UI / screen-space pass
 		gfx_clear_camera(&g)
@@ -190,11 +240,12 @@ main :: proc() {
 			affordable := world.food >= cost
 			if ui_button(&ui, &g, label, x, by, bw, bh) {
 				selected_kind = kind
+				mode = .Place
 			}
 			if !affordable {
 				draw_rect(&g, x, by, bw, bh, {0, 0, 0, 0.45})
 			}
-			if kind == selected_kind {
+			if mode == .Place && kind == selected_kind {
 				_, stroke := tile_color(kind)
 				draw_line(&g, x,        by,        x + bw, by,        2, stroke)
 				draw_line(&g, x,        by + bh,   x + bw, by + bh,   2, stroke)
@@ -204,21 +255,70 @@ main :: proc() {
 		}
 
 		// Top-left HUD
-		powered, total := world_count_powered(&world)
 		core_hp := f32(0)
 		if c, ok := world.tiles[world.core]; ok do core_hp = c.hp
+		power_remaining := world_power_remaining(&world)
 		food_line  := fmt.tprintf("Food:  %d", i32(world.food))
-		power_line := fmt.tprintf("Power: %d/%d", powered, total)
+		scrap_line := fmt.tprintf("Scrap: %d", world.scrap)
+		power_line := fmt.tprintf("Power: %d", power_remaining)
 		core_line  := fmt.tprintf("Core:  %.0f", core_hp)
+		power_color := [4]f32{0.96, 0.86, 0.62, 1}
+		if power_remaining < 0 do power_color = {1.00, 0.36, 0.36, 1}
 		enemy_line := fmt.tprintf("Enemies: %d  [C] crawler  [B] brute", len(world.enemies))
 		draw_text(&g, 12, 12 + FONT_PIXEL_SIZE,             food_line,  {0.92, 0.98, 0.78, 1})
-		draw_text(&g, 12, 12 + FONT_PIXEL_SIZE * 2 + 4,     power_line, {0.96, 0.86, 0.62, 1})
-		draw_text(&g, 12, 12 + FONT_PIXEL_SIZE * 3 + 8,     core_line,  {0.85, 0.82, 0.99, 1})
-		draw_text(&g, 12, 12 + FONT_PIXEL_SIZE * 4 + 12,    enemy_line, {0.96, 0.78, 0.78, 1})
+		draw_text(&g, 12, 12 + FONT_PIXEL_SIZE * 2 + 4,     scrap_line, {0.72, 0.83, 0.96, 1})
+		draw_text(&g, 12, 12 + FONT_PIXEL_SIZE * 3 + 8,     power_line, power_color)
+		draw_text(&g, 12, 12 + FONT_PIXEL_SIZE * 4 + 12,    core_line,  {0.85, 0.82, 0.99, 1})
+		draw_text(&g, 12, 12 + FONT_PIXEL_SIZE * 5 + 16,    enemy_line, {0.96, 0.78, 0.78, 1})
 
-		stats := fmt.tprintf("fps %.0f  %.2fms  zoom %.2f  hover (%d, %d)  selected: %s",
-			fps, frame_ms, cam.zoom, hover.x, hover.y, tile_kind_name(selected_kind))
+		// Big timer at top-center.
+		timer_str := fmt.tprintf("%.1fs", world.survive_time)
+		TIMER_SCALE :: f32(2.25)
+		tw_timer := text_measure(&g.text, timer_str, TIMER_SCALE)
+		timer_y := f32(16) + FONT_PIXEL_SIZE * TIMER_SCALE
+		draw_text(&g, (sw - tw_timer) * 0.5, timer_y, timer_str, {0.95, 0.95, 0.98, 1}, TIMER_SCALE)
+
+		// Surge countdown directly underneath.
+		if world.waves.surge_active {
+			active_str := "SURGE ACTIVE"
+			aw := text_measure(&g.text, active_str)
+			draw_text(&g, (sw - aw) * 0.5, timer_y + 14, active_str, {1.00, 0.55, 0.55, 1})
+		} else {
+			rem := waves_time_to_next_surge(&world.waves)
+			cd_str := fmt.tprintf("Next surge in %.0fs", rem)
+			cw := text_measure(&g.text, cd_str)
+			draw_text(&g, (sw - cw) * 0.5, timer_y + 14, cd_str, {0.78, 0.82, 0.92, 1})
+		}
+
+		// SURGE WAVE banner — flashes for ~3 seconds when a surge fires.
+		if world.waves.banner_time > 0 {
+			BANNER_SCALE :: f32(2.75)
+			banner_str := fmt.tprintf("SURGE WAVE %d", world.waves.last_surge_num)
+			bw_banner := text_measure(&g.text, banner_str, BANNER_SCALE)
+			alpha := world.waves.banner_time / WAVE_BANNER_DURATION
+			if alpha > 1 do alpha = 1
+			if alpha < 0 do alpha = 0
+			draw_text(&g, (sw - bw_banner) * 0.5, sh * 0.5, banner_str, {1.00, 0.30, 0.30, alpha}, BANNER_SCALE)
+		}
+
+		mode_label := mode == .Place ? "PLACE (shift = multi)" : "SELECT"
+		stats := fmt.tprintf("fps %.0f  %.2fms  zoom %.2f  hover (%d, %d)  mode: %s  kind: %s",
+			fps, frame_ms, cam.zoom, hover.x, hover.y, mode_label, tile_kind_name(selected_kind))
 		draw_text(&g, 12, sh - 12 - picker_h - 12 - FONT_PIXEL_SIZE, stats, {0.65, 0.70, 0.78, 1})
+
+		if world.game_over {
+			draw_rect(&g, 0, 0, sw, sh, {0, 0, 0, 0.65})
+			head := "CORE DESTROYED"
+			body := fmt.tprintf("Survived %.1fs   |   Scrap collected: %d", world.survive_time, world.scrap)
+			tip  := "Press R to restart"
+			hw := text_measure(&g.text, head)
+			bw := text_measure(&g.text, body)
+			tw := text_measure(&g.text, tip)
+			cy := sh * 0.5
+			draw_text(&g, (sw - hw) * 0.5, cy - 28, head, {1.00, 0.82, 0.82, 1})
+			draw_text(&g, (sw - bw) * 0.5, cy + 4,  body, {0.96, 0.96, 0.96, 1})
+			draw_text(&g, (sw - tw) * 0.5, cy + 36, tip,  {0.78, 0.86, 1.00, 1})
+		}
 
 		gfx_end(&g)
 		free_all(context.temp_allocator)
