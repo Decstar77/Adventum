@@ -32,11 +32,18 @@ Shape_Frame_Buffer :: struct {
 	mapped: rawptr,
 }
 
+Shape_Batch :: struct {
+	count:   u32,
+	scissor: [4]i32,
+}
+
 Shape_Renderer :: struct {
 	pipeline_layout: vk.PipelineLayout,
 	pipeline:        vk.Pipeline,
 	frames:          [MAX_FRAMES_IN_FLIGHT]Shape_Frame_Buffer,
 	cpu_verts:       [dynamic]Shape_Vert,
+	batches:         [dynamic]Shape_Batch,
+	current_scissor: [4]i32,
 }
 
 shapes_init :: proc(s: ^Shape_Renderer, r: ^Renderer) -> bool {
@@ -64,6 +71,21 @@ shapes_shutdown :: proc(s: ^Shape_Renderer, r: ^Renderer) {
 	if s.pipeline != 0 do vk.DestroyPipeline(r.device, s.pipeline, nil)
 	if s.pipeline_layout != 0 do vk.DestroyPipelineLayout(r.device, s.pipeline_layout, nil)
 	delete(s.cpu_verts)
+	delete(s.batches)
+}
+
+shapes_set_scissor :: proc(s: ^Shape_Renderer, scissor: [4]i32) {
+	s.current_scissor = scissor
+}
+
+@(private="file")
+shapes_active_batch :: proc(s: ^Shape_Renderer) -> ^Shape_Batch {
+	n := len(s.batches)
+	if n == 0 || s.batches[n-1].scissor != s.current_scissor {
+		append(&s.batches, Shape_Batch{count = 0, scissor = s.current_scissor})
+		n = len(s.batches)
+	}
+	return &s.batches[n-1]
 }
 
 shapes_create_pipeline :: proc(s: ^Shape_Renderer, r: ^Renderer) -> bool {
@@ -181,6 +203,7 @@ push_quad :: proc(
 	v2 := Shape_Vert{pos = p2, local = l2, params = params, color = color, type = type}
 	v3 := Shape_Vert{pos = p3, local = l3, params = params, color = color, type = type}
 	append(&s.cpu_verts, v0, v1, v2, v0, v2, v3)
+	shapes_active_batch(s).count += 6
 }
 
 shapes_push_rect :: proc(s: ^Shape_Renderer, x, y, w, h: f32, color: [4]f32) {
@@ -242,7 +265,10 @@ shapes_push_line :: proc(s: ^Shape_Renderer, ax, ay, bx, by, thickness: f32, col
 shapes_record :: proc(s: ^Shape_Renderer, r: ^Renderer, cb: vk.CommandBuffer) {
 	frame := r.current_frame
 	count := len(s.cpu_verts)
-	if count == 0 do return
+	if count == 0 {
+		clear(&s.batches)
+		return
+	}
 	if count > MAX_SHAPE_VERTS do count = MAX_SHAPE_VERTS
 
 	dst := ([^]Shape_Vert)(s.frames[frame].mapped)
@@ -255,7 +281,22 @@ shapes_record :: proc(s: ^Shape_Renderer, r: ^Renderer, cb: vk.CommandBuffer) {
 	offset := vk.DeviceSize(0)
 	vbuf := s.frames[frame].vbuf
 	vk.CmdBindVertexBuffers(cb, 0, 1, &vbuf, &offset)
-	vk.CmdDraw(cb, u32(count), 1, 0, 0)
+
+	first := u32(0)
+	remaining := u32(count)
+	for batch in s.batches {
+		if remaining == 0 do break
+		draw := batch.count
+		if draw > remaining do draw = remaining
+		sw := batch.scissor[2]; if sw < 0 do sw = 0
+		sh := batch.scissor[3]; if sh < 0 do sh = 0
+		rect := vk.Rect2D{offset = {batch.scissor[0], batch.scissor[1]}, extent = {u32(sw), u32(sh)}}
+		vk.CmdSetScissor(cb, 0, 1, &rect)
+		vk.CmdDraw(cb, draw, 1, first, 0)
+		first += draw
+		remaining -= draw
+	}
 
 	clear(&s.cpu_verts)
+	clear(&s.batches)
 }

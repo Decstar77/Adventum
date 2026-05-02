@@ -1,10 +1,10 @@
 package main
 
-import "core:thread"
 import "core:fmt"
 import "core:os"
 import "core:time"
 import "vendor:glfw"
+import win "core:sys/windows"
 
 main :: proc() {
 	if !bool(glfw.Init()) {
@@ -38,12 +38,19 @@ main :: proc() {
 	defer gfx_shutdown(&g)
 
 	ui: UI
+	ui_init(&ui, window)
+	defer ui_shutdown(&ui)
 	clicks := 0
 
 	monitor := glfw.GetPrimaryMonitor()
 	vid_mode := glfw.GetVideoMode(monitor)
-	refresh_hz := vid_mode != nil ? i32(vid_mode.refresh_rate) : 0
+	refresh_hz := vid_mode != nil ? i32(vid_mode.refresh_rate) : 60
+	if refresh_hz <= 0 do refresh_hz = 60
 	fmt.printfln("monitor: %dx%d @ %dHz", vid_mode != nil ? vid_mode.width : 0, vid_mode != nil ? vid_mode.height : 0, refresh_hz)
+
+	target_dt := 1.0 / f64(refresh_hz)
+	win.timeBeginPeriod(1)
+	defer win.timeEndPeriod(1)
 
 	last_time := glfw.GetTime()
 	frame_dt: f64 = 0
@@ -91,5 +98,10 @@ main :: proc() {
 
 		gfx_end(&g)
 		free_all(context.temp_allocator)
+
+		elapsed := glfw.GetTime() - now
+		if elapsed < target_dt {
+			time.sleep(time.Duration((target_dt - elapsed) * f64(time.Second)))
+		}
 	}
 }

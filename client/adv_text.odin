@@ -7,7 +7,7 @@ import tt "vendor:stb/truetype"
 import vk "vendor:vulkan"
 
 FONT_PATH       :: "res/fonts/SUSEMono-Regular.ttf"
-FONT_PIXEL_SIZE :: 32.0
+FONT_PIXEL_SIZE :: 16.0
 FONT_FIRST_CHAR :: 32
 FONT_NUM_CHARS  :: 95
 ATLAS_W         :: 512
@@ -33,6 +33,11 @@ Text_Frame_Buffer :: struct {
 	mapped: rawptr,
 }
 
+Text_Batch :: struct {
+	count:   u32,
+	scissor: [4]i32,
+}
+
 Text_Renderer :: struct {
 	chardata:        [FONT_NUM_CHARS]tt.bakedchar,
 	atlas_image:     vk.Image,
@@ -50,6 +55,8 @@ Text_Renderer :: struct {
 	frames:          [MAX_FRAMES_IN_FLIGHT]Text_Frame_Buffer,
 
 	cpu_verts:       [dynamic]Text_Vert,
+	batches:         [dynamic]Text_Batch,
+	current_scissor: [4]i32,
 }
 
 text_init :: proc(t: ^Text_Renderer, r: ^Renderer) -> bool {
@@ -85,6 +92,21 @@ text_shutdown :: proc(t: ^Text_Renderer, r: ^Renderer) {
 	if t.atlas_image != 0 do vk.DestroyImage(r.device, t.atlas_image, nil)
 	if t.atlas_memory != 0 do vk.FreeMemory(r.device, t.atlas_memory, nil)
 	delete(t.cpu_verts)
+	delete(t.batches)
+}
+
+text_set_scissor :: proc(t: ^Text_Renderer, scissor: [4]i32) {
+	t.current_scissor = scissor
+}
+
+@(private="file")
+text_active_batch :: proc(t: ^Text_Renderer) -> ^Text_Batch {
+	n := len(t.batches)
+	if n == 0 || t.batches[n-1].scissor != t.current_scissor {
+		append(&t.batches, Text_Batch{count = 0, scissor = t.current_scissor})
+		n = len(t.batches)
+	}
+	return &t.batches[n-1]
 }
 
 text_bake_atlas :: proc(t: ^Text_Renderer, r: ^Renderer) -> bool {
@@ -299,6 +321,7 @@ text_measure :: proc(t: ^Text_Renderer, s: string) -> f32 {
 text_push :: proc(t: ^Text_Renderer, x, y: f32, s: string, color: [4]f32) {
 	xpos := x
 	ypos := y
+	batch := text_active_batch(t)
 	for ch in s {
 		if int(ch) < FONT_FIRST_CHAR || int(ch) >= FONT_FIRST_CHAR + FONT_NUM_CHARS do continue
 		q: tt.aligned_quad
@@ -309,13 +332,17 @@ text_push :: proc(t: ^Text_Renderer, x, y: f32, s: string, color: [4]f32) {
 		v2 := Text_Vert{pos = {q.x1, q.y1}, uv = {q.s1, q.t1}, color = color}
 		v3 := Text_Vert{pos = {q.x0, q.y1}, uv = {q.s0, q.t1}, color = color}
 		append(&t.cpu_verts, v0, v1, v2, v0, v2, v3)
+		batch.count += 6
 	}
 }
 
 text_record :: proc(t: ^Text_Renderer, r: ^Renderer, cb: vk.CommandBuffer) {
 	frame := r.current_frame
 	count := len(t.cpu_verts)
-	if count == 0 do return
+	if count == 0 {
+		clear(&t.batches)
+		return
+	}
 	if count > MAX_TEXT_VERTS do count = MAX_TEXT_VERTS
 
 	dst := ([^]Text_Vert)(t.frames[frame].mapped)
@@ -329,7 +356,22 @@ text_record :: proc(t: ^Text_Renderer, r: ^Renderer, cb: vk.CommandBuffer) {
 	offset := vk.DeviceSize(0)
 	vbuf := t.frames[frame].vbuf
 	vk.CmdBindVertexBuffers(cb, 0, 1, &vbuf, &offset)
-	vk.CmdDraw(cb, u32(count), 1, 0, 0)
+
+	first := u32(0)
+	remaining := u32(count)
+	for batch in t.batches {
+		if remaining == 0 do break
+		draw := batch.count
+		if draw > remaining do draw = remaining
+		sw := batch.scissor[2]; if sw < 0 do sw = 0
+		sh := batch.scissor[3]; if sh < 0 do sh = 0
+		rect := vk.Rect2D{offset = {batch.scissor[0], batch.scissor[1]}, extent = {u32(sw), u32(sh)}}
+		vk.CmdSetScissor(cb, 0, 1, &rect)
+		vk.CmdDraw(cb, draw, 1, first, 0)
+		first += draw
+		remaining -= draw
+	}
 
 	clear(&t.cpu_verts)
+	clear(&t.batches)
 }

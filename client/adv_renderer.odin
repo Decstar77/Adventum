@@ -309,12 +309,12 @@ create_swapchain :: proc(r: ^Renderer) -> bool {
 	defer delete(modes)
 	vk.GetPhysicalDeviceSurfacePresentModesKHR(r.physical_device, r.surface, &mode_count, raw_data(modes))
 	present_mode := vk.PresentModeKHR.FIFO
-	// for m in modes {
-	// 	if m == .MAILBOX {
-	// 		present_mode = .MAILBOX
-	// 		break
-	// 	}
-	// }
+	for m in modes {
+		if m == .MAILBOX {
+			present_mode = .MAILBOX
+			break
+		}
+	}
 	fmt.printfln("present mode: %v", present_mode)
 
 	extent := caps.currentExtent
