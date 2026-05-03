@@ -300,10 +300,6 @@ main :: proc() {
 				mode = .Place
 			}
 
-			// Hotkey number, top-left corner.
-			hk := fmt.tprintf("%d", i + 1)
-			draw_text(&g, x + 6, by + FONT_PIXEL_SIZE - 2, hk, {1, 1, 1, 0.55})
-
 			// Tile icon, left-center.
 			draw_tile_icon(&g, x + 32, by + bh * 0.5, kind, 1)
 
