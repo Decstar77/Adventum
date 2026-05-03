@@ -176,7 +176,20 @@ enemies_update :: proc(w: ^World, dt: f32) {
 			tile, present := w.tiles[target]
 			if present {
 				tile.hp -= dmg * dt
+				// Spark at the contact point on the hex boundary, biased
+				// away from the tile center toward the enemy.
+				dir := [2]f32{dx / max(d, 0.001), dy / max(d, 0.001)}
+				contact := [2]f32{
+					center.x - dir.x * boundary,
+					center.y - dir.y * boundary,
+				}
+				// Probabilistic emission — averages a few sparks per second
+				// per attacking enemy so dense swarms don't drown the screen.
+				if rand.float32() < dt * 6 {
+					fx_emit_enemy_attack(w, contact, dir)
+				}
 				if tile.hp <= 0 && tile.kind != .Core {
+					fx_emit_tile_destroyed(w, center, tile.kind)
 					world_remove(w, target)
 				} else {
 					w.tiles[target] = tile

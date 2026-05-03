@@ -101,6 +101,88 @@ fx_emit_impact :: proc(w: ^World, pos: [2]f32, vel: [2]f32) {
 	}
 }
 
+fx_emit_enemy_attack :: proc(w: ^World, pos: [2]f32, toward: [2]f32) {
+	// `toward` points from the enemy at the tile being struck. Sparks fly
+	// back toward the attacker plus a small bright chip at the contact.
+	angle := f32(0)
+	if toward.x != 0 || toward.y != 0 {
+		angle = math.atan2(-toward.y, -toward.x)
+	}
+	emit(w, Particle{
+		pos      = pos,
+		vel      = {0, 0},
+		life     = 0.10,
+		max_life = 0.10,
+		r0       = 4,
+		r1       = 0,
+		color    = {1.0, 0.85, 0.55, 1},
+		drag     = 0,
+	})
+	for _ in 0 ..< 3 {
+		a := angle + rand.float32_range(-0.7, 0.7)
+		s := rand.float32_range(80, 180)
+		life := rand.float32_range(0.14, 0.26)
+		emit(w, Particle{
+			pos      = pos,
+			vel      = {math.cos(a) * s, math.sin(a) * s},
+			life     = life,
+			max_life = life,
+			r0       = rand.float32_range(1.4, 2.4),
+			r1       = 0,
+			color    = {0.95, 0.55, 0.30, 1},
+			drag     = 5,
+		})
+	}
+}
+
+fx_emit_tile_destroyed :: proc(w: ^World, pos: [2]f32, kind: Tile_Kind) {
+	fill, stroke := tile_color(kind)
+	// Bright shockwave flash in the tile's stroke color.
+	flash := stroke
+	flash.a = 1
+	emit(w, Particle{
+		pos      = pos,
+		vel      = {0, 0},
+		life     = 0.28,
+		max_life = 0.28,
+		r0       = 28,
+		r1       = 4,
+		color    = flash,
+		drag     = 0,
+	})
+	// Inner soft core in the fill color.
+	core := fill
+	core.a = 1
+	emit(w, Particle{
+		pos      = pos,
+		vel      = {0, 0},
+		life     = 0.18,
+		max_life = 0.18,
+		r0       = 18,
+		r1       = 2,
+		color    = core,
+		drag     = 0,
+	})
+	// Debris chunks alternating between fill and stroke.
+	for i in 0 ..< 22 {
+		a := rand.float32_range(0, 2 * math.PI)
+		s := rand.float32_range(80, 320)
+		life := rand.float32_range(0.35, 0.70)
+		c := i % 2 == 0 ? stroke : fill
+		c.a = 1
+		emit(w, Particle{
+			pos      = pos,
+			vel      = {math.cos(a) * s, math.sin(a) * s},
+			life     = life,
+			max_life = life,
+			r0       = rand.float32_range(2.2, 4.2),
+			r1       = 0,
+			color    = c,
+			drag     = 3,
+		})
+	}
+}
+
 fx_emit_enemy_death :: proc(w: ^World, pos: [2]f32, kind: Enemy_Kind) {
 	core_color: [4]f32
 	chunk_color: [4]f32
