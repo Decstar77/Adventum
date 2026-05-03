@@ -3,19 +3,21 @@ package main
 import "core:math"
 
 Tile_Kind :: enum {
-	Core,
 	Farm,
 	Generator,
+	Wire,
 	Turret,
 	Wall,
 	Relay,
+	Core,
 }
 
 TILE_KIND_COUNT :: len(Tile_Kind)
+// Core is unique and granted at world init; only the rest are placeable.
+BUILDABLE_COUNT :: TILE_KIND_COUNT - 1
 
-BUILD_RANGE       :: 2
-GENERATOR_OUTPUT  :: 3
-START_FOOD        :: f32(30)
+BUILD_RANGE :: 2
+START_FOOD  :: f32(30)
 
 Tile :: struct {
 	kind:      Tile_Kind,
@@ -62,6 +64,7 @@ tile_cost :: proc(kind: Tile_Kind) -> f32 {
 	case .Core:      return 0
 	case .Farm:      return 5
 	case .Generator: return 10
+	case .Wire:      return 4
 	case .Turret:    return 15
 	case .Wall:      return 3
 	case .Relay:     return 8
@@ -116,6 +119,7 @@ tile_max_hp :: proc(kind: Tile_Kind) -> f32 {
 	case .Wall:      return 200
 	case .Turret:    return 80
 	case .Generator: return 60
+	case .Wire:      return 30
 	case .Relay:     return 50
 	case .Farm:      return 50
 	}
@@ -139,31 +143,41 @@ world_count_powered :: proc(w: ^World) -> (powered, total: int) {
 	return
 }
 
-world_power_remaining :: proc(w: ^World) -> i32 {
-	supply := i32(0)
-	demand := i32(0)
-	for _, tile in w.tiles {
-		if tile.kind == .Generator do supply += i32(GENERATOR_OUTPUT)
-		if tile_consumes_energy(tile.kind) do demand += 1
-	}
-	return supply - demand
-}
-
 @(private="file")
 world_recompute_energy :: proc(w: ^World) {
-	// Pass 1: producers self-power; everything else starts cold.
+	// Pass 1: only Generator and Core start energized.
 	for coord, tile in w.tiles {
 		t := tile
 		t.energized = (tile.kind == .Generator || tile.kind == .Core)
 		w.tiles[coord] = t
 	}
 
-	// Pass 2: each generator powers up to GENERATOR_OUTPUT consumer neighbors.
+	// Pass 2: BFS power along Wire tiles starting from each Generator.
+	queue: [dynamic]Hex_Coord
+	defer delete(queue)
 	for coord, tile in w.tiles {
-		if tile.kind != .Generator do continue
-		capacity := GENERATOR_OUTPUT
+		if tile.kind == .Generator do append(&queue, coord)
+	}
+	for i := 0; i < len(queue); i += 1 {
+		coord := queue[i]
 		for d in HEX_NEIGHBOR_OFFSETS {
-			if capacity <= 0 do break
+			n := Hex_Coord{coord.x + d.x, coord.y + d.y}
+			nt, ok := w.tiles[n]
+			if !ok do continue
+			if nt.kind == .Wire && !nt.energized {
+				nt.energized = true
+				w.tiles[n] = nt
+				append(&queue, n)
+			}
+		}
+	}
+
+	// Pass 3: any consumer adjacent to a powered conductor (Generator or
+	// energized Wire) is energized.
+	for coord, tile in w.tiles {
+		is_conductor := tile.kind == .Generator || (tile.kind == .Wire && tile.energized)
+		if !is_conductor do continue
+		for d in HEX_NEIGHBOR_OFFSETS {
 			n := Hex_Coord{coord.x + d.x, coord.y + d.y}
 			nt, ok := w.tiles[n]
 			if !ok do continue
@@ -171,7 +185,6 @@ world_recompute_energy :: proc(w: ^World) {
 			if nt.energized do continue
 			nt.energized = true
 			w.tiles[n] = nt
-			capacity -= 1
 		}
 	}
 }
@@ -192,6 +205,7 @@ tile_kind_name :: proc(kind: Tile_Kind) -> string {
 	case .Core:      return "Core"
 	case .Farm:      return "Farm"
 	case .Generator: return "Generator"
+	case .Wire:      return "Wire"
 	case .Turret:    return "Turret"
 	case .Wall:      return "Wall"
 	case .Relay:     return "Relay"
@@ -206,6 +220,8 @@ tile_color :: proc(kind: Tile_Kind) -> (fill, stroke: [4]f32) {
 	case .Farm:
 		return {0.918, 0.953, 0.871, 1}, {0.231, 0.427, 0.067, 1}
 	case .Generator:
+		return {0.980, 0.933, 0.855, 1}, {0.522, 0.310, 0.043, 1}
+	case .Wire:
 		return {0.980, 0.933, 0.855, 1}, {0.522, 0.310, 0.043, 1}
 	case .Turret:
 		return {0.988, 0.922, 0.922, 1}, {0.639, 0.176, 0.176, 1}
@@ -240,6 +256,12 @@ draw_tile_marker :: proc(g: ^Graphics, c: Hex_Coord, tile: Tile, alpha: f32) {
 		draw_line(g, cx - 6, cy - 12, cx + 6, cy +  0, 3, amber)
 		draw_line(g, cx + 6, cy +  0, cx - 4, cy + 12, 3, amber)
 
+	case .Wire:
+		spark := [4]f32{0.729, 0.459, 0.090, alpha}
+		draw_line(g, cx - 10, cy, cx + 10, cy, 3, spark)
+		draw_line(g, cx, cy - 10, cx, cy + 10, 3, spark)
+		draw_circle(g, cx, cy, 3, stroke)
+
 	case .Turret:
 		hot := [4]f32{0.886, 0.294, 0.290, alpha}
 		draw_circle(g, cx, cy, 8, hot)
@@ -268,7 +290,7 @@ world_render :: proc(w: ^World, g: ^Graphics) {
 	for coord, tile in w.tiles {
 		_, stroke := tile_color(tile.kind)
 		alpha := f32(1)
-		if tile_consumes_energy(tile.kind) && !tile.energized {
+		if (tile_consumes_energy(tile.kind) || tile.kind == .Wire) && !tile.energized {
 			alpha = 0.45
 		}
 		stroke.a *= alpha

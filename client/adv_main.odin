@@ -93,7 +93,7 @@ main :: proc() {
 	// Initial energization pass so the Core's energized flag is correct from frame 0.
 	world_tick(&world, 0)
 
-	HOTKEYS := [TILE_KIND_COUNT]i32{
+	HOTKEYS := [BUILDABLE_COUNT]i32{
 		glfw.KEY_1, glfw.KEY_2, glfw.KEY_3,
 		glfw.KEY_4, glfw.KEY_5, glfw.KEY_6,
 	}
@@ -228,7 +228,7 @@ main :: proc() {
 		picker_h    := f32(56)
 		picker_pad  := f32(8)
 		picker_y    := sh - picker_h - 12
-		picker_w    := f32(TILE_KIND_COUNT) * 132 + f32(TILE_KIND_COUNT - 1) * 8 + picker_pad * 2
+		picker_w    := f32(BUILDABLE_COUNT) * 132 + f32(BUILDABLE_COUNT - 1) * 8 + picker_pad * 2
 		picker_x    := (sw - picker_w) * 0.5
 		mouse_in_picker := point_in_rect(ui.mouse, picker_x, picker_y, picker_w, picker_h)
 
@@ -288,7 +288,7 @@ main :: proc() {
 		by := picker_y + picker_pad
 		bw := f32(132)
 		bh := picker_h - picker_pad * 2
-		for i in 0 ..< TILE_KIND_COUNT {
+		for i in 0 ..< BUILDABLE_COUNT {
 			kind := Tile_Kind(i)
 			cost := tile_cost(kind)
 			label := fmt.tprintf("%d %s  -%.0ff", i + 1, tile_kind_name(kind), cost)
@@ -313,19 +313,14 @@ main :: proc() {
 		// Top-left HUD
 		core_hp := f32(0)
 		if c, ok := world.tiles[world.core]; ok do core_hp = c.hp
-		power_remaining := world_power_remaining(&world)
 		food_line  := fmt.tprintf("Food:  %d", i32(world.food))
 		scrap_line := fmt.tprintf("Scrap: %d", world.scrap)
-		power_line := fmt.tprintf("Power: %d", power_remaining)
 		core_line  := fmt.tprintf("Core:  %.0f", core_hp)
-		power_color := [4]f32{0.96, 0.86, 0.62, 1}
-		if power_remaining < 0 do power_color = {1.00, 0.36, 0.36, 1}
 		enemy_line := fmt.tprintf("Enemies: %d  [C] crawler  [B] brute", len(world.enemies))
 		draw_text(&g, 12, 12 + FONT_PIXEL_SIZE,             food_line,  {0.92, 0.98, 0.78, 1})
 		draw_text(&g, 12, 12 + FONT_PIXEL_SIZE * 2 + 4,     scrap_line, {0.72, 0.83, 0.96, 1})
-		draw_text(&g, 12, 12 + FONT_PIXEL_SIZE * 3 + 8,     power_line, power_color)
-		draw_text(&g, 12, 12 + FONT_PIXEL_SIZE * 4 + 12,    core_line,  {0.85, 0.82, 0.99, 1})
-		draw_text(&g, 12, 12 + FONT_PIXEL_SIZE * 5 + 16,    enemy_line, {0.96, 0.78, 0.78, 1})
+		draw_text(&g, 12, 12 + FONT_PIXEL_SIZE * 3 + 8,     core_line,  {0.85, 0.82, 0.99, 1})
+		draw_text(&g, 12, 12 + FONT_PIXEL_SIZE * 4 + 12,    enemy_line, {0.96, 0.78, 0.78, 1})
 
 		// Big timer at top-center.
 		timer_str := fmt.tprintf("%.1fs", world.survive_time)

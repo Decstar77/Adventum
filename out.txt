@@ -1,2 +1,0 @@
-present mode: FIFO
-monitor: 1920x1080 @ 60Hz
