@@ -115,6 +115,16 @@ world_remove :: proc(w: ^World, c: Hex_Coord) -> bool {
 	return true
 }
 
+world_sell :: proc(w: ^World, c: Hex_Coord) -> bool {
+	t, ok := w.tiles[c]
+	if !ok do return false
+	if t.kind == .Core do return false
+	w.food += tile_cost(t.kind) * 0.5
+	delete_key(&w.tiles, c)
+	w.path_dirty = true
+	return true
+}
+
 tile_max_hp :: proc(kind: Tile_Kind) -> f32 {
 	switch kind {
 	case .Core:      return 200
@@ -374,7 +384,6 @@ render_buildable_area :: proc(w: ^World, g: ^Graphics) {
 
 world_render_hover :: proc(w: ^World, g: ^Graphics, hover: Hex_Coord, center: [2]f32, placing: bool, selected: Tile_Kind) {
 	if !placing {
-		draw_hex_outline_at(g, center, 1.5, {1, 1, 1, 0.55})
 		return
 	}
 

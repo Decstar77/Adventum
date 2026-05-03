@@ -58,6 +58,11 @@ main :: proc() {
 
 	mode          := Selection_Mode.Default
 	selected_kind := Tile_Kind.Farm
+	selected_tile: Hex_Coord
+	has_selection: bool
+
+	PANEL_W :: f32(240)
+	PANEL_H :: f32(220)
 
 	rmb_down     := false
 	rmb_was_down := false
@@ -181,11 +186,18 @@ main :: proc() {
 			if input_just_pressed(&input, k) {
 				selected_kind = Tile_Kind(i)
 				mode = .Place
+				has_selection = false
 			}
 		}
 
 		if input_just_pressed(&input, glfw.KEY_ESCAPE) {
 			mode = .Default
+			has_selection = false
+		}
+
+		// Drop stale selection (tile sold or destroyed).
+		if has_selection {
+			if _, ok := world.tiles[selected_tile]; !ok do has_selection = false
 		}
 
 		if !world.game_over {
@@ -233,6 +245,11 @@ main :: proc() {
 		picker_x    := (sw - picker_w) * 0.5
 		mouse_in_picker := point_in_rect(ui.mouse, picker_x, picker_y, picker_w, picker_h)
 
+		// Right-side selection panel (only visible when something is selected).
+		panel_x := sw - PANEL_W - 12
+		panel_y := f32(12)
+		mouse_in_panel := has_selection && point_in_rect(ui.mouse, panel_x, panel_y, PANEL_W, PANEL_H)
+
 		// Hex under cursor
 		mouse_world := camera_screen_to_world(&cam, ui.mouse, sw, sh)
 		hover := pixel_to_hex(mouse_world)
@@ -241,10 +258,17 @@ main :: proc() {
 		lmb_just := ui_mouse_just_pressed(&ui)
 		rmb_just := rmb_down && !rmb_was_down
 		shift_held := input_is_down(&input, glfw.KEY_LEFT_SHIFT) || input_is_down(&input, glfw.KEY_RIGHT_SHIFT)
-		if !mouse_in_picker && !world.game_over {
+		if !mouse_in_picker && !mouse_in_panel && !world.game_over {
 			if lmb_just && mode == .Place {
 				if world_place(&world, hover, selected_kind) {
 					if !shift_held do mode = .Default
+				}
+			} else if lmb_just && mode == .Default {
+				if _, ok := world.tiles[hover]; ok {
+					selected_tile = hover
+					has_selection = true
+				} else {
+					has_selection = false
 				}
 			}
 			if rmb_just {
@@ -279,6 +303,15 @@ main :: proc() {
 
 		if !world.game_over {
 			world_render_hover(&world, &g, hover, hover_smoothed, mode == .Place, selected_kind)
+
+			if mode == .Default && !mouse_in_picker && !mouse_in_panel {
+				if _, ok := world.tiles[hover]; ok {
+					draw_hex_outline(&g, hover, 2.5, {1, 1, 1, 0.9})
+				}
+			}
+			if has_selection {
+				draw_hex_outline(&g, selected_tile, 3, {1, 1, 1, 1})
+			}
 		}
 
 		// UI / screen-space pass
@@ -298,6 +331,7 @@ main :: proc() {
 			if ui_button(&ui, &g, "", x, by, bw, bh) {
 				selected_kind = kind
 				mode = .Place
+				has_selection = false
 			}
 
 			// Tile icon, left-center.
@@ -376,6 +410,52 @@ main :: proc() {
 			if alpha > 1 do alpha = 1
 			if alpha < 0 do alpha = 0
 			draw_text(&g, (sw - bw_banner) * 0.5, sh * 0.5, banner_str, {1.00, 0.30, 0.30, alpha}, .Large)
+		}
+
+		// Selection panel.
+		if has_selection {
+			tile := world.tiles[selected_tile]
+			max_hp := tile_max_hp(tile.kind)
+			cost := tile_cost(tile.kind)
+
+			draw_rect(&g, panel_x, panel_y, PANEL_W, PANEL_H, {0.10, 0.11, 0.14, 0.92})
+			draw_line(&g, panel_x, panel_y, panel_x + PANEL_W, panel_y, 1, {1, 1, 1, 0.15})
+			draw_line(&g, panel_x, panel_y + PANEL_H, panel_x + PANEL_W, panel_y + PANEL_H, 1, {0, 0, 0, 0.40})
+
+			title := tile_kind_name(tile.kind)
+			tw_title := text_measure(&g.text, title, .Large)
+			draw_text(&g, panel_x + (PANEL_W - tw_title) * 0.5, panel_y + 12 + font_pixel_size(.Large), title, {0.95, 0.95, 0.98, 1}, .Large)
+
+			hp_y := panel_y + 12 + font_pixel_size(.Large) + 24
+			hp_str := fmt.tprintf("HP  %.0f / %.0f", tile.hp, max_hp)
+			draw_text(&g, panel_x + 16, hp_y + FONT_PIXEL_SIZE, hp_str, {0.85, 0.90, 0.98, 1})
+
+			bar_x := panel_x + 16
+			bar_y := hp_y + FONT_PIXEL_SIZE + 8
+			bar_w := PANEL_W - 32
+			bar_h := f32(8)
+			frac := max_hp > 0 ? tile.hp / max_hp : 0
+			if frac < 0 do frac = 0
+			if frac > 1 do frac = 1
+			draw_rect(&g, bar_x, bar_y, bar_w, bar_h, {0.05, 0.06, 0.08, 1})
+			draw_rect(&g, bar_x, bar_y, bar_w * frac, bar_h, {0.45, 0.85, 0.55, 1})
+
+			btn_w := PANEL_W - 32
+			btn_h := f32(36)
+			btn_x := panel_x + 16
+			sell_y := panel_y + PANEL_H - 16 - btn_h * 2 - 8
+			upgrade_y := panel_y + PANEL_H - 16 - btn_h
+
+			can_sell := tile.kind != .Core
+			refund := i32(cost * 0.5)
+			sell_label := can_sell ? fmt.tprintf("Sell  (+%d food)", refund) : "Sell  (locked)"
+			if ui_button_at(&ui, &g, sell_label, btn_x, sell_y, btn_w, btn_h) && can_sell {
+				world_sell(&world, selected_tile)
+				has_selection = false
+			}
+			if ui_button_at(&ui, &g, "Upgrade", btn_x, upgrade_y, btn_w, btn_h) {
+				// TODO: implement upgrades.
+			}
 		}
 
 		mode_label := mode == .Place ? "PLACE (shift = multi)" : "SELECT"
