@@ -233,14 +233,11 @@ tile_color :: proc(kind: Tile_Kind) -> (fill, stroke: [4]f32) {
 	return {1, 1, 1, 1}, {0, 0, 0, 1}
 }
 
-@(private="file")
-draw_tile_marker :: proc(g: ^Graphics, c: Hex_Coord, tile: Tile, alpha: f32) {
-	center := hex_to_pixel(c)
-	cx, cy := center.x, center.y
-	_, stroke := tile_color(tile.kind)
+draw_tile_icon :: proc(g: ^Graphics, cx, cy: f32, kind: Tile_Kind, alpha: f32, aim_angle: f32 = -math.PI * 0.5) {
+	_, stroke := tile_color(kind)
 	stroke.a *= alpha
 
-	switch tile.kind {
+	switch kind {
 	case .Core:
 		draw_circle(g, cx, cy, 10, stroke)
 
@@ -266,8 +263,8 @@ draw_tile_marker :: proc(g: ^Graphics, c: Hex_Coord, tile: Tile, alpha: f32) {
 		hot := [4]f32{0.886, 0.294, 0.290, alpha}
 		draw_circle(g, cx, cy, 8, hot)
 		barrel_len := f32(15)
-		bx := cx + math.cos(tile.aim_angle) * barrel_len
-		by := cy + math.sin(tile.aim_angle) * barrel_len
+		bx := cx + math.cos(aim_angle) * barrel_len
+		by := cy + math.sin(aim_angle) * barrel_len
 		draw_line(g, cx, cy, bx, by, 4, stroke)
 
 	case .Wall:
@@ -279,11 +276,55 @@ draw_tile_marker :: proc(g: ^Graphics, c: Hex_Coord, tile: Tile, alpha: f32) {
 	case .Relay:
 		ring_outer := [4]f32{0.365, 0.792, 0.647, alpha}
 		ring_inner := [4]f32{0.114, 0.620, 0.459, alpha}
-		fill, _ := tile_color(tile.kind)
+		fill, _ := tile_color(kind)
 		draw_circle(g, cx, cy, 10, ring_outer)
 		draw_circle(g, cx, cy,  7, fill)
 		draw_circle(g, cx, cy,  4, ring_inner)
 	}
+}
+
+@(private="file")
+draw_tile_marker :: proc(g: ^Graphics, c: Hex_Coord, tile: Tile, alpha: f32) {
+	center := hex_to_pixel(c)
+	draw_tile_icon(g, center.x, center.y, tile.kind, alpha, tile.aim_angle)
+}
+
+// Small HUD icons drawn within an `s` × `s` box anchored at top-left (x, y).
+draw_food_icon :: proc(g: ^Graphics, x, y, s: f32) {
+	dark  := [4]f32{0.231, 0.427, 0.067, 1}
+	light := [4]f32{0.388, 0.600, 0.133, 1}
+	q := s * 0.45
+	gap := s - q * 2
+	draw_rect(g, x,             y,             q, q, dark)
+	draw_rect(g, x + q + gap,   y,             q, q, dark)
+	draw_rect(g, x,             y + q + gap,   q, q, light)
+	draw_rect(g, x + q + gap,   y + q + gap,   q, q, light)
+}
+
+draw_scrap_icon :: proc(g: ^Graphics, x, y, s: f32) {
+	mid    := [4]f32{0.533, 0.529, 0.502, 1}
+	stroke := [4]f32{0.373, 0.369, 0.353, 1}
+	draw_rect(g, x + s * 0.10, y + s * 0.20, s * 0.80, s * 0.60, mid)
+	draw_line(g, x + s * 0.10, y + s * 0.50, x + s * 0.90, y + s * 0.50, 2, stroke)
+}
+
+draw_core_icon :: proc(g: ^Graphics, x, y, s: f32) {
+	stroke := [4]f32{0.325, 0.290, 0.718, 1}
+	fill   := [4]f32{0.733, 0.729, 0.996, 1}
+	cx := x + s * 0.5
+	cy := y + s * 0.5
+	r  := s * 0.40
+	draw_circle(g, cx, cy, r,        stroke)
+	draw_circle(g, cx, cy, r * 0.65, fill)
+}
+
+draw_enemy_icon :: proc(g: ^Graphics, x, y, s: f32) {
+	hot   := [4]f32{0.886, 0.294, 0.290, 1}
+	dark  := [4]f32{0.639, 0.176, 0.176, 1}
+	cx := x + s * 0.5
+	cy := y + s * 0.5
+	draw_circle(g, cx, cy, s * 0.42, dark)
+	draw_circle(g, cx, cy, s * 0.30, hot)
 }
 
 world_render :: proc(w: ^World, g: ^Graphics) {

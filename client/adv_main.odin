@@ -291,13 +291,30 @@ main :: proc() {
 		for i in 0 ..< BUILDABLE_COUNT {
 			kind := Tile_Kind(i)
 			cost := tile_cost(kind)
-			label := fmt.tprintf("%d %s  -%.0ff", i + 1, tile_kind_name(kind), cost)
 			x := bx + f32(i) * (bw + 8)
 			affordable := world.food >= cost
-			if ui_button(&ui, &g, label, x, by, bw, bh) {
+			if ui_button(&ui, &g, "", x, by, bw, bh) {
 				selected_kind = kind
 				mode = .Place
 			}
+
+			// Hotkey number, top-left corner.
+			hk := fmt.tprintf("%d", i + 1)
+			draw_text(&g, x + 6, by + FONT_PIXEL_SIZE - 2, hk, {1, 1, 1, 0.55})
+
+			// Tile icon, left-center.
+			draw_tile_icon(&g, x + 32, by + bh * 0.5, kind, 1)
+
+			// Cost (food icon + number) right-aligned.
+			cost_str := fmt.tprintf("%.0f", cost)
+			cw := text_measure(&g.text, cost_str)
+			text_x := x + bw - 8 - cw
+			text_y := by + bh * 0.5 + FONT_PIXEL_SIZE * 0.35
+			cost_color := affordable ? [4]f32{1, 1, 1, 1} : [4]f32{1, 0.55, 0.55, 1}
+			draw_text(&g, text_x, text_y, cost_str, cost_color)
+			icon_s := f32(16)
+			draw_food_icon(&g, text_x - icon_s - 4, by + (bh - icon_s) * 0.5, icon_s)
+
 			if !affordable {
 				draw_rect(&g, x, by, bw, bh, {0, 0, 0, 0.45})
 			}
@@ -310,17 +327,30 @@ main :: proc() {
 			}
 		}
 
-		// Top-left HUD
+		// Top-left HUD — icon + value per row.
 		core_hp := f32(0)
 		if c, ok := world.tiles[world.core]; ok do core_hp = c.hp
-		food_line  := fmt.tprintf("Food:  %d", i32(world.food))
-		scrap_line := fmt.tprintf("Scrap: %d", world.scrap)
-		core_line  := fmt.tprintf("Core:  %.0f", core_hp)
-		enemy_line := fmt.tprintf("Enemies: %d  [C] crawler  [B] brute", len(world.enemies))
-		draw_text(&g, 12, 12 + FONT_PIXEL_SIZE,             food_line,  {0.92, 0.98, 0.78, 1})
-		draw_text(&g, 12, 12 + FONT_PIXEL_SIZE * 2 + 4,     scrap_line, {0.72, 0.83, 0.96, 1})
-		draw_text(&g, 12, 12 + FONT_PIXEL_SIZE * 3 + 8,     core_line,  {0.85, 0.82, 0.99, 1})
-		draw_text(&g, 12, 12 + FONT_PIXEL_SIZE * 4 + 12,    enemy_line, {0.96, 0.78, 0.78, 1})
+		hud_icon_s := f32(18)
+		hud_icon_x := f32(12)
+		hud_text_x := hud_icon_x + hud_icon_s + 6
+		row_y :: proc(n: f32) -> f32 { return 12 + FONT_PIXEL_SIZE * n + 4 * (n - 1) }
+		// row_y(n) is the text baseline for row n (1-based).
+		// Icon top sits ~3 px above baseline-FONT_PIXEL_SIZE for visual centering.
+		icon_top :: proc(baseline_y, icon_size: f32) -> f32 {
+			return baseline_y - icon_size + (icon_size - FONT_PIXEL_SIZE) * 0.5 + 1
+		}
+		y1 := row_y(1)
+		y2 := row_y(2)
+		y3 := row_y(3)
+		y4 := row_y(4)
+		draw_food_icon (&g, hud_icon_x, icon_top(y1, hud_icon_s), hud_icon_s)
+		draw_scrap_icon(&g, hud_icon_x, icon_top(y2, hud_icon_s), hud_icon_s)
+		draw_core_icon (&g, hud_icon_x, icon_top(y3, hud_icon_s), hud_icon_s)
+		draw_enemy_icon(&g, hud_icon_x, icon_top(y4, hud_icon_s), hud_icon_s)
+		draw_text(&g, hud_text_x, y1, fmt.tprintf("%d", i32(world.food)),                                   {0.92, 0.98, 0.78, 1})
+		draw_text(&g, hud_text_x, y2, fmt.tprintf("%d", world.scrap),                                       {0.72, 0.83, 0.96, 1})
+		draw_text(&g, hud_text_x, y3, fmt.tprintf("%.0f", core_hp),                                         {0.85, 0.82, 0.99, 1})
+		draw_text(&g, hud_text_x, y4, fmt.tprintf("%d  [C] crawler  [B] brute", len(world.enemies)),        {0.96, 0.78, 0.78, 1})
 
 		// Big timer at top-center.
 		timer_str := fmt.tprintf("%.1fs", world.survive_time)
