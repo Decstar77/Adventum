@@ -65,6 +65,10 @@ main :: proc() {
 	hover_smoothed:      [2]f32
 	hover_smoothed_init: bool
 
+	is_fullscreen:        bool
+	windowed_x, windowed_y: i32 = 0, 0
+	windowed_w, windowed_h: i32 = 1280, 720
+
 	monitor := glfw.GetPrimaryMonitor()
 	vid_mode := glfw.GetVideoMode(monitor)
 	refresh_hz := vid_mode != nil ? i32(vid_mode.refresh_rate) : 60
@@ -118,7 +122,9 @@ main :: proc() {
 		sh := f32(r.swapchain_extent.height)
 
 		dt := f32(frame_dt)
-		PAN_SPEED :: f32(400)
+		PAN_SPEED       :: f32(400)
+		EDGE_MARGIN     :: f32(24)
+		EDGE_PAN_SPEED  :: f32(550)
 		pan: [2]f32
 		if input_is_down(&input, glfw.KEY_W) do pan.y -= 1
 		if input_is_down(&input, glfw.KEY_S) do pan.y += 1
@@ -126,6 +132,39 @@ main :: proc() {
 		if input_is_down(&input, glfw.KEY_D) do pan.x += 1
 		if pan.x != 0 || pan.y != 0 {
 			cam.pos += pan * (PAN_SPEED * dt / cam.zoom)
+		}
+
+		// Mouse edge scroll: only when the cursor is inside the window. Pan
+		// speed ramps from 0 at EDGE_MARGIN inward to full speed at the edge.
+		if ui.mouse.x >= 0 && ui.mouse.y >= 0 && ui.mouse.x < sw && ui.mouse.y < sh {
+			edge: [2]f32
+			if ui.mouse.x < EDGE_MARGIN          do edge.x = -(1 - ui.mouse.x / EDGE_MARGIN)
+			else if ui.mouse.x > sw - EDGE_MARGIN do edge.x =  1 - (sw - ui.mouse.x) / EDGE_MARGIN
+			if ui.mouse.y < EDGE_MARGIN          do edge.y = -(1 - ui.mouse.y / EDGE_MARGIN)
+			else if ui.mouse.y > sh - EDGE_MARGIN do edge.y =  1 - (sh - ui.mouse.y) / EDGE_MARGIN
+			if edge.x != 0 || edge.y != 0 {
+				cam.pos += edge * (EDGE_PAN_SPEED * dt / cam.zoom)
+			}
+		}
+
+		// Shift+Enter: toggle borderless fullscreen on the primary monitor.
+		shift_down := input_is_down(&input, glfw.KEY_LEFT_SHIFT) || input_is_down(&input, glfw.KEY_RIGHT_SHIFT)
+		if shift_down && input_just_pressed(&input, glfw.KEY_ENTER) {
+			if !is_fullscreen {
+				windowed_x, windowed_y = glfw.GetWindowPos(window)
+				windowed_w, windowed_h = glfw.GetWindowSize(window)
+				mon := glfw.GetPrimaryMonitor()
+				vm  := glfw.GetVideoMode(mon)
+				if mon != nil && vm != nil {
+					glfw.SetWindowMonitor(window, mon, 0, 0, vm.width, vm.height, vm.refresh_rate)
+					is_fullscreen = true
+					renderer_recreate_swapchain(&r)
+				}
+			} else {
+				glfw.SetWindowMonitor(window, nil, windowed_x, windowed_y, windowed_w, windowed_h, 0)
+				is_fullscreen = false
+				renderer_recreate_swapchain(&r)
+			}
 		}
 
 		if ui.scroll_dy != 0 {

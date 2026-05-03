@@ -98,22 +98,3 @@ draw_hex_outline :: proc(g: ^Graphics, c: Hex_Coord, thickness: f32, color: [4]f
 	draw_hex_outline_at(g, hex_to_pixel(c), thickness, color)
 }
 
-// Draws a hex outline for every cell at axial distance `ring` from the centre,
-// translated so the centre sits at `center` in pixel space (so the rings can
-// follow a smoothed selection without snapping per-hex).
-draw_hex_ring_at :: proc(g: ^Graphics, center: [2]f32, ring: i32, thickness: f32, color: [4]f32) {
-	if ring <= 0 {
-		draw_hex_outline_at(g, center, thickness, color)
-		return
-	}
-	origin := hex_to_pixel({0, 0})
-	for q in -ring ..= ring {
-		for r in -ring ..= ring {
-			c := Hex_Coord{q, r}
-			if hex_distance({0, 0}, c) != ring do continue
-			off := hex_to_pixel(c)
-			p := [2]f32{center.x + off.x - origin.x, center.y + off.y - origin.y}
-			draw_hex_outline_at(g, p, thickness, color)
-		}
-	}
-}

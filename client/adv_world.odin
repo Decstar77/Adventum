@@ -281,11 +281,39 @@ world_render :: proc(w: ^World, g: ^Graphics) {
 	}
 }
 
+@(private="file")
+render_buildable_area :: proc(w: ^World, g: ^Graphics) {
+	blue := [4]f32{0.36, 0.62, 0.95, 0.25}
+	visit :: proc(w: ^World, g: ^Graphics, c: Hex_Coord, color: [4]f32, seen: ^map[Hex_Coord]bool) {
+		for q in i32(-BUILD_RANGE) ..= i32(BUILD_RANGE) {
+			for r in i32(-BUILD_RANGE) ..= i32(BUILD_RANGE) {
+				n := Hex_Coord{c.x + q, c.y + r}
+				if hex_distance(n, c) > BUILD_RANGE do continue
+				if n in seen^ do continue
+				if n in w.tiles do continue
+				seen^[n] = true
+				draw_hex_outline(g, n, 1.5, color)
+			}
+		}
+	}
+
+	seen: map[Hex_Coord]bool
+	defer delete(seen)
+	visit(w, g, w.core, blue, &seen)
+	for coord, tile in w.tiles {
+		if tile.kind == .Relay {
+			visit(w, g, coord, blue, &seen)
+		}
+	}
+}
+
 world_render_hover :: proc(w: ^World, g: ^Graphics, hover: Hex_Coord, center: [2]f32, placing: bool, selected: Tile_Kind) {
 	if !placing {
 		draw_hex_outline_at(g, center, 1.5, {1, 1, 1, 0.55})
 		return
 	}
+
+	render_buildable_area(w, g)
 
 	occupied := hover in w.tiles
 	can := !occupied && world_can_place(w, hover, selected)
@@ -296,11 +324,5 @@ world_render_hover :: proc(w: ^World, g: ^Graphics, hover: Hex_Coord, center: [2
 	case can:      main_color = {0.30, 0.85, 0.45, 0.85}
 	case:          main_color = {0.85, 0.30, 0.30, 0.55}
 	}
-
-	ring_rgb := main_color.rgb
-	ring1 := [4]f32{ring_rgb.r, ring_rgb.g, ring_rgb.b, main_color.a * 0.35}
-	ring2 := [4]f32{ring_rgb.r, ring_rgb.g, ring_rgb.b, main_color.a * 0.15}
-	draw_hex_ring_at(g, center, 2, 1.0, ring2)
-	draw_hex_ring_at(g, center, 1, 1.25, ring1)
 	draw_hex_outline_at(g, center, occupied ? 1.5 : 2.5, main_color)
 }

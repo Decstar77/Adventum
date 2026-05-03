@@ -66,6 +66,36 @@ renderer_init :: proc(r: ^Renderer, window: glfw.WindowHandle) -> bool {
 	return true
 }
 
+renderer_recreate_swapchain :: proc(r: ^Renderer) -> bool {
+	if r.device == nil do return false
+	// Wait for the current frame's resources to settle. The drained framebuffer
+	// dimensions are 0×0 while the window is minimised — bail and retry later.
+	for {
+		w, h := glfw.GetFramebufferSize(r.window)
+		if w > 0 && h > 0 do break
+		glfw.WaitEvents()
+	}
+	vk.DeviceWaitIdle(r.device)
+
+	for fb in r.framebuffers do vk.DestroyFramebuffer(r.device, fb, nil)
+	delete(r.framebuffers)
+	r.framebuffers = nil
+	for v in r.swapchain_views do vk.DestroyImageView(r.device, v, nil)
+	delete(r.swapchain_views)
+	r.swapchain_views = nil
+	delete(r.swapchain_images)
+	r.swapchain_images = nil
+	if r.swapchain != 0 {
+		vk.DestroySwapchainKHR(r.device, r.swapchain, nil)
+		r.swapchain = 0
+	}
+
+	if !create_swapchain(r) do return false
+	if !create_image_views(r) do return false
+	if !create_framebuffers(r) do return false
+	return true
+}
+
 renderer_shutdown :: proc(r: ^Renderer) {
 	if r.device != nil {
 		vk.DeviceWaitIdle(r.device)
