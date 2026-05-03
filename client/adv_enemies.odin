@@ -131,7 +131,7 @@ enemy_spawn :: proc(w: ^World, kind: Enemy_Kind) {
 	append(&w.enemies, Enemy{kind = kind, pos = pos, hp = hp})
 }
 
-ENEMY_ATTACK_RANGE :: f32(36)
+ENEMY_BODY_RADIUS :: f32(10)
 
 @(private="file")
 nearest_tile_to :: proc(w: ^World, from: [2]f32) -> (Hex_Coord, bool) {
@@ -167,7 +167,12 @@ enemies_update :: proc(w: ^World, dt: f32) {
 		dy := center.y - e.pos.y
 		d := math.sqrt(dx * dx + dy * dy)
 
-		if d <= ENEMY_ATTACK_RANGE {
+		// Stop at the tile boundary (hex edge along the approach direction)
+		// rather than the tile centre, plus a small body-radius buffer.
+		boundary := hex_boundary_distance(-dx, -dy)
+		stop_dist := boundary + ENEMY_BODY_RADIUS
+
+		if d <= stop_dist {
 			tile, present := w.tiles[target]
 			if present {
 				tile.hp -= dmg * dt
@@ -181,24 +186,44 @@ enemies_update :: proc(w: ^World, dt: f32) {
 		}
 
 		step := speed * dt
-		if d <= step {
-			e.pos = center
-		} else {
-			e.pos.x += dx / d * step
-			e.pos.y += dy / d * step
+		travel := min(step, d - stop_dist)
+		if travel > 0 {
+			e.pos.x += dx / d * travel
+			e.pos.y += dy / d * travel
 		}
 	}
 }
 
+// Small health bar centred at (cx, cy). Skips drawing when at full health.
+draw_health_bar :: proc(g: ^Graphics, cx, cy, width: f32, hp, max_hp: f32) {
+	if max_hp <= 0 || hp >= max_hp do return
+	frac := clamp(hp / max_hp, 0, 1)
+	height := f32(3)
+	x := cx - width * 0.5
+	y := cy - height * 0.5
+	draw_rect(g, x - 1, y - 1, width + 2, height + 2, {0, 0, 0, 0.7})
+	draw_rect(g, x, y, width, height, {0.18, 0.18, 0.18, 0.9})
+	fill_color: [4]f32
+	switch {
+	case frac > 0.6: fill_color = {0.42, 0.78, 0.34, 1}
+	case frac > 0.3: fill_color = {0.93, 0.78, 0.20, 1}
+	case:            fill_color = {0.88, 0.29, 0.29, 1}
+	}
+	draw_rect(g, x, y, width * frac, height, fill_color)
+}
+
 enemies_render :: proc(w: ^World, g: ^Graphics) {
 	for e in w.enemies {
+		max_hp, _, _ := enemy_stats(e.kind)
 		switch e.kind {
 		case .Crawler:
 			draw_circle(g, e.pos.x, e.pos.y, 10, {0.988, 0.922, 0.922, 1})
 			draw_circle(g, e.pos.x, e.pos.y,  5, {0.886, 0.294, 0.290, 1})
+			draw_health_bar(g, e.pos.x, e.pos.y - 16, 20, e.hp, max_hp)
 		case .Brute:
 			draw_rect(g, e.pos.x - 9, e.pos.y - 9, 18, 18, {0.980, 0.933, 0.855, 1})
 			draw_rect(g, e.pos.x - 5, e.pos.y - 5, 10, 10, {0.729, 0.459, 0.090, 1})
+			draw_health_bar(g, e.pos.x, e.pos.y - 16, 24, e.hp, max_hp)
 		}
 	}
 }

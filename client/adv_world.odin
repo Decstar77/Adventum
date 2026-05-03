@@ -274,25 +274,33 @@ world_render :: proc(w: ^World, g: ^Graphics) {
 		stroke.a *= alpha
 		draw_hex_outline(g, coord, 2, stroke)
 		draw_tile_marker(g, coord, tile, alpha)
+
+		max_hp := tile_max_hp(tile.kind)
+		center := hex_to_pixel(coord)
+		draw_health_bar(g, center.x, center.y - HEX_APOTHEM + 6, 30, tile.hp, max_hp)
 	}
 }
 
-world_render_hover :: proc(w: ^World, g: ^Graphics, hover: Hex_Coord, placing: bool, selected: Tile_Kind) {
+world_render_hover :: proc(w: ^World, g: ^Graphics, hover: Hex_Coord, center: [2]f32, placing: bool, selected: Tile_Kind) {
 	if !placing {
-		// Selection feedback for Default mode: a faint white outline, regardless of contents.
-		draw_hex_outline(g, hover, 1.5, {1, 1, 1, 0.55})
+		draw_hex_outline_at(g, center, 1.5, {1, 1, 1, 0.55})
 		return
 	}
-	if hover in w.tiles {
-		draw_hex_outline(g, hover, 1.5, {1, 1, 1, 0.35})
-		return
+
+	occupied := hover in w.tiles
+	can := !occupied && world_can_place(w, hover, selected)
+
+	main_color: [4]f32
+	switch {
+	case occupied: main_color = {1, 1, 1, 0.35}
+	case can:      main_color = {0.30, 0.85, 0.45, 0.85}
+	case:          main_color = {0.85, 0.30, 0.30, 0.55}
 	}
-	can := world_can_place(w, hover, selected)
-	color: [4]f32
-	if can {
-		color = {0.30, 0.85, 0.45, 0.85}
-	} else {
-		color = {0.85, 0.30, 0.30, 0.55}
-	}
-	draw_hex_outline(g, hover, 2.5, color)
+
+	ring_rgb := main_color.rgb
+	ring1 := [4]f32{ring_rgb.r, ring_rgb.g, ring_rgb.b, main_color.a * 0.35}
+	ring2 := [4]f32{ring_rgb.r, ring_rgb.g, ring_rgb.b, main_color.a * 0.15}
+	draw_hex_ring_at(g, center, 2, 1.0, ring2)
+	draw_hex_ring_at(g, center, 1, 1.25, ring1)
+	draw_hex_outline_at(g, center, occupied ? 1.5 : 2.5, main_color)
 }

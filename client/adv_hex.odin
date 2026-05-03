@@ -57,6 +57,22 @@ hex_distance :: proc(a, b: Hex_Coord) -> i32 {
 	return d / 2
 }
 
+HEX_APOTHEM :: HEX_SIZE * SQRT3 * 0.5
+
+// Distance from a hex center to the hex boundary along the direction (dx, dy).
+// Flat-top hex: edge normals are at PI/6 + k*PI/3 (k = 0..5). For an arbitrary
+// direction we find the nearest normal and use boundary = apothem / cos(delta).
+hex_boundary_distance :: proc(dx, dy: f32) -> f32 {
+	if dx == 0 && dy == 0 do return HEX_APOTHEM
+	phi := math.atan2(dy, dx)
+	step := f32(math.PI / 3.0)
+	sixth := f32(math.PI / 6.0)
+	n := math.round((phi - sixth) / step)
+	nearest_normal := sixth + n * step
+	delta := phi - nearest_normal
+	return HEX_APOTHEM / math.cos(delta)
+}
+
 hex_corners :: proc(center: [2]f32) -> [6][2]f32 {
 	corners: [6][2]f32
 	for i in 0 ..< 6 {
@@ -69,12 +85,35 @@ hex_corners :: proc(center: [2]f32) -> [6][2]f32 {
 	return corners
 }
 
-draw_hex_outline :: proc(g: ^Graphics, c: Hex_Coord, thickness: f32, color: [4]f32) {
-	center := hex_to_pixel(c)
+draw_hex_outline_at :: proc(g: ^Graphics, center: [2]f32, thickness: f32, color: [4]f32) {
 	corners := hex_corners(center)
 	for i in 0 ..< 6 {
 		a := corners[i]
 		b := corners[(i + 1) % 6]
 		draw_line(g, a.x, a.y, b.x, b.y, thickness, color)
+	}
+}
+
+draw_hex_outline :: proc(g: ^Graphics, c: Hex_Coord, thickness: f32, color: [4]f32) {
+	draw_hex_outline_at(g, hex_to_pixel(c), thickness, color)
+}
+
+// Draws a hex outline for every cell at axial distance `ring` from the centre,
+// translated so the centre sits at `center` in pixel space (so the rings can
+// follow a smoothed selection without snapping per-hex).
+draw_hex_ring_at :: proc(g: ^Graphics, center: [2]f32, ring: i32, thickness: f32, color: [4]f32) {
+	if ring <= 0 {
+		draw_hex_outline_at(g, center, thickness, color)
+		return
+	}
+	origin := hex_to_pixel({0, 0})
+	for q in -ring ..= ring {
+		for r in -ring ..= ring {
+			c := Hex_Coord{q, r}
+			if hex_distance({0, 0}, c) != ring do continue
+			off := hex_to_pixel(c)
+			p := [2]f32{center.x + off.x - origin.x, center.y + off.y - origin.y}
+			draw_hex_outline_at(g, p, thickness, color)
+		}
 	}
 }

@@ -3,6 +3,7 @@ package main
 import "core:fmt"
 import "core:os"
 import "core:time"
+import "core:math"
 import "vendor:glfw"
 import win "core:sys/windows"
 
@@ -60,6 +61,9 @@ main :: proc() {
 
 	rmb_down     := false
 	rmb_was_down := false
+
+	hover_smoothed:      [2]f32
+	hover_smoothed_init: bool
 
 	monitor := glfw.GetPrimaryMonitor()
 	vid_mode := glfw.GetVideoMode(monitor)
@@ -219,8 +223,21 @@ main :: proc() {
 		world_render(&world, &g)
 		enemies_render(&world, &g)
 		projectiles_render(&world, &g)
+		// Exponential smoothing toward the hovered hex's pixel centre.
+		// a = lerp(a, B, 1 - exp(-dt * RATE)) — frame-rate independent.
+		HOVER_SMOOTH_RATE :: f32(30)
+		hover_target := hex_to_pixel(hover)
+		if !hover_smoothed_init {
+			hover_smoothed = hover_target
+			hover_smoothed_init = true
+		} else {
+			t := 1 - math.exp(-dt * HOVER_SMOOTH_RATE)
+			hover_smoothed.x += (hover_target.x - hover_smoothed.x) * t
+			hover_smoothed.y += (hover_target.y - hover_smoothed.y) * t
+		}
+
 		if !world.game_over {
-			world_render_hover(&world, &g, hover, mode == .Place, selected_kind)
+			world_render_hover(&world, &g, hover, hover_smoothed, mode == .Place, selected_kind)
 		}
 
 		// UI / screen-space pass
