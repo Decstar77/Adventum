@@ -3,15 +3,19 @@ package main
 import vk "vendor:vulkan"
 
 Graphics :: struct {
-	renderer:      ^Renderer,
-	shapes:        Shape_Renderer,
-	text:          Text_Renderer,
-	cb:            vk.CommandBuffer,
-	scissor_stack: [dynamic][4]i32,
+	renderer:           ^Renderer,
+	bg:                 Background_Renderer,
+	shapes:             Shape_Renderer,
+	text:               Text_Renderer,
+	cb:                 vk.CommandBuffer,
+	scissor_stack:      [dynamic][4]i32,
+	world_view_scale:   [2]f32,
+	world_view_offset:  [2]f32,
 }
 
 gfx_init :: proc(g: ^Graphics, r: ^Renderer) -> bool {
 	g.renderer = r
+	if !background_init(&g.bg, r) do return false
 	if !shapes_init(&g.shapes, r) do return false
 	if !text_init(&g.text, r) do return false
 	return true
@@ -22,6 +26,7 @@ gfx_shutdown :: proc(g: ^Graphics) {
 	vk.DeviceWaitIdle(g.renderer.device)
 	text_shutdown(&g.text, g.renderer)
 	shapes_shutdown(&g.shapes, g.renderer)
+	background_shutdown(&g.bg, g.renderer)
 	delete(g.scissor_stack)
 }
 
@@ -40,6 +45,8 @@ gfx_begin :: proc(g: ^Graphics) -> bool {
 	shapes_set_scissor(&g.shapes, full)
 	shapes_set_view(&g.shapes, {1, 1}, {0, 0})
 	text_set_scissor(&g.text, full)
+	g.world_view_scale  = {1, 1}
+	g.world_view_offset = {0, 0}
 	return true
 }
 
@@ -48,6 +55,8 @@ gfx_set_camera :: proc(g: ^Graphics, cam: ^Camera) {
 	sh := f32(g.renderer.swapchain_extent.height)
 	scale := [2]f32{cam.zoom, cam.zoom}
 	offset := [2]f32{sw * 0.5 - cam.pos.x * cam.zoom, sh * 0.5 - cam.pos.y * cam.zoom}
+	g.world_view_scale  = scale
+	g.world_view_offset = offset
 	shapes_set_view(&g.shapes, scale, offset)
 }
 
@@ -56,6 +65,7 @@ gfx_clear_camera :: proc(g: ^Graphics) {
 }
 
 gfx_end :: proc(g: ^Graphics) {
+	background_record(&g.bg, g.renderer, g.cb, g.world_view_scale, g.world_view_offset)
 	shapes_record(&g.shapes, g.renderer, g.cb)
 	text_record(&g.text, g.renderer, g.cb)
 	renderer_end_frame(g.renderer)
