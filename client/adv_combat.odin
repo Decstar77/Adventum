@@ -99,6 +99,7 @@ turrets_fire :: proc(w: ^World, dt: f32) {
 					dmg  = TURRET_DAMAGE,
 					life = PROJECTILE_LIFE,
 				})
+				fx_emit_muzzle(w, muzzle, t.aim_angle)
 				t.cooldown = TURRET_FIRE_INTERVAL
 			}
 		}
@@ -114,6 +115,7 @@ projectiles_update :: proc(w: ^World, dt: f32) {
 		p.pos.x += p.vel.x * dt
 		p.pos.y += p.vel.y * dt
 		p.life -= dt
+		fx_emit_projectile_trail(w, p.pos)
 
 		hit := false
 		for j in 0 ..< len(w.enemies) {
@@ -127,6 +129,9 @@ projectiles_update :: proc(w: ^World, dt: f32) {
 			}
 		}
 
+		if hit {
+			fx_emit_impact(w, p.pos, p.vel)
+		}
 		if hit || p.life <= 0 {
 			unordered_remove(&w.projectiles, i)
 		}
@@ -136,6 +141,7 @@ projectiles_update :: proc(w: ^World, dt: f32) {
 sweep_dead_enemies :: proc(w: ^World) {
 	for i := len(w.enemies) - 1; i >= 0; i -= 1 {
 		if w.enemies[i].hp <= 0 {
+			fx_emit_enemy_death(w, w.enemies[i].pos, w.enemies[i].kind)
 			w.scrap += scrap_for_kind(w.enemies[i].kind)
 			unordered_remove(&w.enemies, i)
 		}

@@ -34,6 +34,7 @@ World :: struct {
 	scrap:         i32,
 	enemies:       [dynamic]Enemy,
 	projectiles:   [dynamic]Projectile,
+	particles:     [dynamic]Particle,
 	field_crawler: Path_Field,
 	field_brute:   Path_Field,
 	path_dirty:    bool,
@@ -54,6 +55,7 @@ world_shutdown :: proc(w: ^World) {
 	delete(w.tiles)
 	delete(w.enemies)
 	delete(w.projectiles)
+	delete(w.particles)
 	path_field_destroy(&w.field_crawler)
 	path_field_destroy(&w.field_brute)
 	waves_shutdown(&w.waves)

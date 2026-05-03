@@ -218,6 +218,7 @@ main :: proc() {
 			projectiles_update(&world, dt)
 			enemies_update(&world, dt)
 			sweep_dead_enemies(&world)
+			particles_update(&world, dt)
 
 			if c, ok := world.tiles[world.core]; ok {
 				if c.hp <= 0 do world.game_over = true
@@ -262,6 +263,7 @@ main :: proc() {
 		world_render(&world, &g)
 		enemies_render(&world, &g)
 		projectiles_render(&world, &g)
+		particles_render(&world, &g)
 		// Exponential smoothing toward the hovered hex's pixel centre.
 		// a = lerp(a, B, 1 - exp(-dt * RATE)) — frame-rate independent.
 		HOVER_SMOOTH_RATE :: f32(30)
