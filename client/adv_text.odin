@@ -4,7 +4,7 @@ import "core:fmt"
 import "core:os"
 
 import tt "vendor:stb/truetype"
-import vk "vendor:vulkan"
+import sg "sokol/gfx"
 
 FONT_PATH       :: "res/fonts/SUSEMono-Regular.ttf"
 FONT_PIXEL_SIZE :: 16.0      // legacy alias for the Small atlas; layout math still uses this
@@ -13,9 +13,6 @@ FONT_NUM_CHARS  :: 95
 ATLAS_W         :: 1024
 ATLAS_H         :: 1024
 MAX_TEXT_VERTS  :: 8192
-
-TEXT_VERT_SPV := #load("shaders/text.vert.spv")
-TEXT_FRAG_SPV := #load("shaders/text.frag.spv")
 
 Font_Size :: enum {
 	Small,
@@ -35,14 +32,10 @@ Text_Vert :: struct {
 	color: [4]f32,
 }
 
-Text_PC :: struct #packed {
+// std140 padded: vec2 screen + 8 bytes pad → 16 bytes.
+Text_Uniforms :: struct {
 	screen: [2]f32,
-}
-
-Text_Frame_Buffer :: struct {
-	vbuf:   vk.Buffer,
-	memory: vk.DeviceMemory,
-	mapped: rawptr,
+	_pad:   [2]f32,
 }
 
 Text_Batch :: struct {
@@ -53,24 +46,16 @@ Text_Batch :: struct {
 
 Font_Atlas :: struct {
 	chardata:   [FONT_NUM_CHARS]tt.bakedchar,
-	image:      vk.Image,
-	memory:     vk.DeviceMemory,
-	view:       vk.ImageView,
-	desc_set:   vk.DescriptorSet,
+	image:      sg.Image,
 	pixel_size: f32,
 }
 
 Text_Renderer :: struct {
 	atlases:         [FONT_COUNT]Font_Atlas,
-	sampler:         vk.Sampler,
-
-	desc_layout:     vk.DescriptorSetLayout,
-	desc_pool:       vk.DescriptorPool,
-
-	pipeline_layout: vk.PipelineLayout,
-	pipeline:        vk.Pipeline,
-
-	frames:          [MAX_FRAMES_IN_FLIGHT]Text_Frame_Buffer,
+	sampler:         sg.Sampler,
+	shader:          sg.Shader,
+	pipeline:        sg.Pipeline,
+	vbuf:            sg.Buffer,
 
 	cpu_verts:       [dynamic]Text_Vert,
 	batches:         [dynamic]Text_Batch,
@@ -78,11 +63,7 @@ Text_Renderer :: struct {
 	current_font:    Font_Size,
 }
 
-text_init :: proc(t: ^Text_Renderer, r: ^Renderer) -> bool {
-	if !text_create_sampler(t, r) do return false
-	if !text_create_descriptor_layout(t, r) do return false
-	if !text_create_descriptor_pool(t, r) do return false
-
+text_init :: proc(t: ^Text_Renderer) -> bool {
 	font_data, ok := os.read_entire_file(FONT_PATH)
 	if !ok {
 		fmt.eprintfln("failed to read font: %s", FONT_PATH)
@@ -91,42 +72,75 @@ text_init :: proc(t: ^Text_Renderer, r: ^Renderer) -> bool {
 	defer delete(font_data)
 
 	for size, i in Font_Size {
-		if !text_bake_atlas(t, r, &t.atlases[i], FONT_PIXEL_SIZES[i], font_data) do return false
-		if !text_alloc_atlas_descriptor(t, r, &t.atlases[i]) do return false
+		if !text_bake_atlas(&t.atlases[i], FONT_PIXEL_SIZES[i], font_data) do return false
 	}
 
-	if !text_create_pipeline(t, r) do return false
+	t.sampler = sg.make_sampler({
+		min_filter = .LINEAR,
+		mag_filter = .LINEAR,
+		wrap_u     = .CLAMP_TO_EDGE,
+		wrap_v     = .CLAMP_TO_EDGE,
+		label      = "text-sampler",
+	})
 
-	for i in 0 ..< MAX_FRAMES_IN_FLIGHT {
-		ok2 := create_buffer(
-			r,
-			vk.DeviceSize(MAX_TEXT_VERTS * size_of(Text_Vert)),
-			{.VERTEX_BUFFER},
-			{.HOST_VISIBLE, .HOST_COHERENT},
-			&t.frames[i].vbuf,
-			&t.frames[i].memory,
-		)
-		if !ok2 do return false
-		vk.MapMemory(r.device, t.frames[i].memory, 0, vk.DeviceSize(vk.WHOLE_SIZE), {}, &t.frames[i].mapped)
+	t.vbuf = sg.make_buffer({
+		size  = MAX_TEXT_VERTS * size_of(Text_Vert),
+		usage = .STREAM,
+		type  = .VERTEXBUFFER,
+		label = "text-vbuf",
+	})
+
+	shader_desc := sg.Shader_Desc{
+		vertex_func   = {source = select_shader_source(TEXT_VS_GLCORE, TEXT_VS_GLES3)},
+		fragment_func = {source = select_shader_source(TEXT_FS_GLCORE, TEXT_FS_GLES3)},
+		label         = "text-shader",
 	}
+	shader_desc.attrs[0] = {glsl_name = "in_pos"}
+	shader_desc.attrs[1] = {glsl_name = "in_uv"}
+	shader_desc.attrs[2] = {glsl_name = "in_color"}
+	shader_desc.uniform_blocks[0] = {
+		stage  = .VERTEX,
+		size   = size_of(Text_Uniforms),
+		layout = .STD140,
+	}
+	shader_desc.uniform_blocks[0].glsl_uniforms[0] = {type = .FLOAT2, glsl_name = "screen"}
+	shader_desc.images[0]   = {stage = .FRAGMENT, image_type = ._2D, sample_type = .FLOAT}
+	shader_desc.samplers[0] = {stage = .FRAGMENT, sampler_type = .FILTERING}
+	shader_desc.image_sampler_pairs[0] = {stage = .FRAGMENT, image_slot = 0, sampler_slot = 0, glsl_name = "u_atlas"}
+	t.shader = sg.make_shader(shader_desc)
+
+	pip_desc := sg.Pipeline_Desc{
+		shader         = t.shader,
+		primitive_type = .TRIANGLES,
+		index_type     = .NONE,
+		cull_mode      = .NONE,
+		label          = "text-pipeline",
+	}
+	pip_desc.layout.buffers[0] = {stride = size_of(Text_Vert)}
+	pip_desc.layout.attrs[0] = {buffer_index = 0, offset = i32(offset_of(Text_Vert, pos)),   format = .FLOAT2}
+	pip_desc.layout.attrs[1] = {buffer_index = 0, offset = i32(offset_of(Text_Vert, uv)),    format = .FLOAT2}
+	pip_desc.layout.attrs[2] = {buffer_index = 0, offset = i32(offset_of(Text_Vert, color)), format = .FLOAT4}
+	pip_desc.colors[0] = {
+		blend = {
+			enabled          = true,
+			src_factor_rgb   = .SRC_ALPHA,
+			dst_factor_rgb   = .ONE_MINUS_SRC_ALPHA,
+			op_rgb           = .ADD,
+			src_factor_alpha = .ONE,
+			dst_factor_alpha = .ONE_MINUS_SRC_ALPHA,
+			op_alpha         = .ADD,
+		},
+	}
+	t.pipeline = sg.make_pipeline(pip_desc)
 	return true
 }
 
-text_shutdown :: proc(t: ^Text_Renderer, r: ^Renderer) {
-	for i in 0 ..< MAX_FRAMES_IN_FLIGHT {
-		if t.frames[i].vbuf != 0 do vk.DestroyBuffer(r.device, t.frames[i].vbuf, nil)
-		if t.frames[i].memory != 0 do vk.FreeMemory(r.device, t.frames[i].memory, nil)
-	}
-	if t.pipeline != 0 do vk.DestroyPipeline(r.device, t.pipeline, nil)
-	if t.pipeline_layout != 0 do vk.DestroyPipelineLayout(r.device, t.pipeline_layout, nil)
-	if t.desc_pool != 0 do vk.DestroyDescriptorPool(r.device, t.desc_pool, nil)
-	if t.desc_layout != 0 do vk.DestroyDescriptorSetLayout(r.device, t.desc_layout, nil)
-	if t.sampler != 0 do vk.DestroySampler(r.device, t.sampler, nil)
-	for &a in t.atlases {
-		if a.view != 0 do vk.DestroyImageView(r.device, a.view, nil)
-		if a.image != 0 do vk.DestroyImage(r.device, a.image, nil)
-		if a.memory != 0 do vk.FreeMemory(r.device, a.memory, nil)
-	}
+text_shutdown :: proc(t: ^Text_Renderer) {
+	sg.destroy_pipeline(t.pipeline)
+	sg.destroy_shader(t.shader)
+	sg.destroy_buffer(t.vbuf)
+	sg.destroy_sampler(t.sampler)
+	for &a in t.atlases do sg.destroy_image(a.image)
 	delete(t.cpu_verts)
 	delete(t.batches)
 }
@@ -152,22 +166,7 @@ text_active_batch :: proc(t: ^Text_Renderer) -> ^Text_Batch {
 }
 
 @(private="file")
-text_create_sampler :: proc(t: ^Text_Renderer, r: ^Renderer) -> bool {
-	samp := vk.SamplerCreateInfo{
-		sType        = .SAMPLER_CREATE_INFO,
-		magFilter    = .LINEAR,
-		minFilter    = .LINEAR,
-		mipmapMode   = .LINEAR,
-		addressModeU = .CLAMP_TO_EDGE,
-		addressModeV = .CLAMP_TO_EDGE,
-		addressModeW = .CLAMP_TO_EDGE,
-		borderColor  = .INT_OPAQUE_BLACK,
-	}
-	return vk_check(vk.CreateSampler(r.device, &samp, nil, &t.sampler), "atlas Sampler")
-}
-
-@(private="file")
-text_bake_atlas :: proc(t: ^Text_Renderer, r: ^Renderer, atlas: ^Font_Atlas, pixel_size: f32, font_data: []u8) -> bool {
+text_bake_atlas :: proc(atlas: ^Font_Atlas, pixel_size: f32, font_data: []u8) -> bool {
 	atlas.pixel_size = pixel_size
 
 	pixels := make([]u8, ATLAS_W * ATLAS_H)
@@ -184,178 +183,15 @@ text_bake_atlas :: proc(t: ^Text_Renderer, r: ^Renderer, atlas: ^Font_Atlas, pix
 		return false
 	}
 
-	{
-		ok := create_image_2d(r, ATLAS_W, ATLAS_H, .R8_UNORM, {.TRANSFER_DST, .SAMPLED}, &atlas.image, &atlas.memory)
-		if !ok do return false
+	img_desc := sg.Image_Desc{
+		width        = ATLAS_W,
+		height       = ATLAS_H,
+		pixel_format = .R8,
+		label        = "font-atlas",
 	}
-	upload_image(r, atlas.image, ATLAS_W, ATLAS_H, pixels) or_return
-
-	view_info := vk.ImageViewCreateInfo{
-		sType            = .IMAGE_VIEW_CREATE_INFO,
-		image            = atlas.image,
-		viewType         = .D2,
-		format           = .R8_UNORM,
-		components       = {.IDENTITY, .IDENTITY, .IDENTITY, .IDENTITY},
-		subresourceRange = {aspectMask = {.COLOR}, levelCount = 1, layerCount = 1},
-	}
-	return vk_check(vk.CreateImageView(r.device, &view_info, nil, &atlas.view), "atlas ImageView")
-}
-
-@(private="file")
-text_create_descriptor_layout :: proc(t: ^Text_Renderer, r: ^Renderer) -> bool {
-	binding := vk.DescriptorSetLayoutBinding{
-		binding         = 0,
-		descriptorType  = .COMBINED_IMAGE_SAMPLER,
-		descriptorCount = 1,
-		stageFlags      = {.FRAGMENT},
-	}
-	layout_info := vk.DescriptorSetLayoutCreateInfo{
-		sType        = .DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-		bindingCount = 1,
-		pBindings    = &binding,
-	}
-	return vk_check(vk.CreateDescriptorSetLayout(r.device, &layout_info, nil, &t.desc_layout), "DescriptorSetLayout")
-}
-
-@(private="file")
-text_create_descriptor_pool :: proc(t: ^Text_Renderer, r: ^Renderer) -> bool {
-	pool_size := vk.DescriptorPoolSize{type = .COMBINED_IMAGE_SAMPLER, descriptorCount = u32(FONT_COUNT)}
-	pool_info := vk.DescriptorPoolCreateInfo{
-		sType         = .DESCRIPTOR_POOL_CREATE_INFO,
-		maxSets       = u32(FONT_COUNT),
-		poolSizeCount = 1,
-		pPoolSizes    = &pool_size,
-	}
-	return vk_check(vk.CreateDescriptorPool(r.device, &pool_info, nil, &t.desc_pool), "DescriptorPool")
-}
-
-@(private="file")
-text_alloc_atlas_descriptor :: proc(t: ^Text_Renderer, r: ^Renderer, atlas: ^Font_Atlas) -> bool {
-	layout := t.desc_layout
-	alloc_info := vk.DescriptorSetAllocateInfo{
-		sType              = .DESCRIPTOR_SET_ALLOCATE_INFO,
-		descriptorPool     = t.desc_pool,
-		descriptorSetCount = 1,
-		pSetLayouts        = &layout,
-	}
-	if !vk_check(vk.AllocateDescriptorSets(r.device, &alloc_info, &atlas.desc_set), "AllocateDescriptorSets") do return false
-
-	img_info := vk.DescriptorImageInfo{
-		sampler     = t.sampler,
-		imageView   = atlas.view,
-		imageLayout = .SHADER_READ_ONLY_OPTIMAL,
-	}
-	write := vk.WriteDescriptorSet{
-		sType           = .WRITE_DESCRIPTOR_SET,
-		dstSet          = atlas.desc_set,
-		dstBinding      = 0,
-		descriptorCount = 1,
-		descriptorType  = .COMBINED_IMAGE_SAMPLER,
-		pImageInfo      = &img_info,
-	}
-	vk.UpdateDescriptorSets(r.device, 1, &write, 0, nil)
+	img_desc.data.subimage[0][0] = {ptr = raw_data(pixels), size = ATLAS_W * ATLAS_H}
+	atlas.image = sg.make_image(img_desc)
 	return true
-}
-
-text_create_pipeline :: proc(t: ^Text_Renderer, r: ^Renderer) -> bool {
-	vert_mod, ok1 := create_shader_module(r.device, TEXT_VERT_SPV)
-	if !ok1 do return false
-	defer vk.DestroyShaderModule(r.device, vert_mod, nil)
-	frag_mod, ok2 := create_shader_module(r.device, TEXT_FRAG_SPV)
-	if !ok2 do return false
-	defer vk.DestroyShaderModule(r.device, frag_mod, nil)
-
-	stages := [2]vk.PipelineShaderStageCreateInfo{
-		{sType = .PIPELINE_SHADER_STAGE_CREATE_INFO, stage = {.VERTEX},   module = vert_mod, pName = "main"},
-		{sType = .PIPELINE_SHADER_STAGE_CREATE_INFO, stage = {.FRAGMENT}, module = frag_mod, pName = "main"},
-	}
-
-	binding := vk.VertexInputBindingDescription{binding = 0, stride = size_of(Text_Vert), inputRate = .VERTEX}
-	attrs := [3]vk.VertexInputAttributeDescription{
-		{location = 0, binding = 0, format = .R32G32_SFLOAT,       offset = u32(offset_of(Text_Vert, pos))},
-		{location = 1, binding = 0, format = .R32G32_SFLOAT,       offset = u32(offset_of(Text_Vert, uv))},
-		{location = 2, binding = 0, format = .R32G32B32A32_SFLOAT, offset = u32(offset_of(Text_Vert, color))},
-	}
-	vertex_input := vk.PipelineVertexInputStateCreateInfo{
-		sType                           = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-		vertexBindingDescriptionCount   = 1,
-		pVertexBindingDescriptions      = &binding,
-		vertexAttributeDescriptionCount = 3,
-		pVertexAttributeDescriptions    = raw_data(attrs[:]),
-	}
-	input_assembly := vk.PipelineInputAssemblyStateCreateInfo{
-		sType    = .PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-		topology = .TRIANGLE_LIST,
-	}
-	dynamic_states := [2]vk.DynamicState{.VIEWPORT, .SCISSOR}
-	dynamic_state := vk.PipelineDynamicStateCreateInfo{
-		sType             = .PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-		dynamicStateCount = 2,
-		pDynamicStates    = raw_data(dynamic_states[:]),
-	}
-	viewport_state := vk.PipelineViewportStateCreateInfo{
-		sType         = .PIPELINE_VIEWPORT_STATE_CREATE_INFO,
-		viewportCount = 1,
-		scissorCount  = 1,
-	}
-	rasterizer := vk.PipelineRasterizationStateCreateInfo{
-		sType       = .PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-		polygonMode = .FILL,
-		cullMode    = {},
-		frontFace   = .CLOCKWISE,
-		lineWidth   = 1.0,
-	}
-	multisampling := vk.PipelineMultisampleStateCreateInfo{
-		sType                = .PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-		rasterizationSamples = {._1},
-		minSampleShading     = 1.0,
-	}
-	color_blend_attach := vk.PipelineColorBlendAttachmentState{
-		blendEnable         = true,
-		srcColorBlendFactor = .SRC_ALPHA,
-		dstColorBlendFactor = .ONE_MINUS_SRC_ALPHA,
-		colorBlendOp        = .ADD,
-		srcAlphaBlendFactor = .ONE,
-		dstAlphaBlendFactor = .ONE_MINUS_SRC_ALPHA,
-		alphaBlendOp        = .ADD,
-		colorWriteMask      = {.R, .G, .B, .A},
-	}
-	color_blend := vk.PipelineColorBlendStateCreateInfo{
-		sType           = .PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-		attachmentCount = 1,
-		pAttachments    = &color_blend_attach,
-	}
-
-	pc_range := vk.PushConstantRange{
-		stageFlags = {.VERTEX},
-		offset     = 0,
-		size       = size_of(Text_PC),
-	}
-	layout_info := vk.PipelineLayoutCreateInfo{
-		sType                  = .PIPELINE_LAYOUT_CREATE_INFO,
-		setLayoutCount         = 1,
-		pSetLayouts            = &t.desc_layout,
-		pushConstantRangeCount = 1,
-		pPushConstantRanges    = &pc_range,
-	}
-	if !vk_check(vk.CreatePipelineLayout(r.device, &layout_info, nil, &t.pipeline_layout), "text PipelineLayout") do return false
-
-	info := vk.GraphicsPipelineCreateInfo{
-		sType               = .GRAPHICS_PIPELINE_CREATE_INFO,
-		stageCount          = 2,
-		pStages             = raw_data(stages[:]),
-		pVertexInputState   = &vertex_input,
-		pInputAssemblyState = &input_assembly,
-		pViewportState      = &viewport_state,
-		pRasterizationState = &rasterizer,
-		pMultisampleState   = &multisampling,
-		pColorBlendState    = &color_blend,
-		pDynamicState       = &dynamic_state,
-		layout              = t.pipeline_layout,
-		renderPass          = r.render_pass,
-		subpass             = 0,
-	}
-	return vk_check(vk.CreateGraphicsPipelines(r.device, 0, 1, &info, nil, &t.pipeline), "text GraphicsPipeline")
 }
 
 text_measure :: proc(t: ^Text_Renderer, s: string, font: Font_Size = .Small) -> f32 {
@@ -392,8 +228,7 @@ text_push :: proc(t: ^Text_Renderer, x, y: f32, s: string, color: [4]f32, font: 
 	}
 }
 
-text_record :: proc(t: ^Text_Renderer, r: ^Renderer, cb: vk.CommandBuffer) {
-	frame := r.current_frame
+text_record :: proc(t: ^Text_Renderer, r: ^Renderer) {
 	count := len(t.cpu_verts)
 	if count == 0 {
 		clear(&t.batches)
@@ -401,16 +236,11 @@ text_record :: proc(t: ^Text_Renderer, r: ^Renderer, cb: vk.CommandBuffer) {
 	}
 	if count > MAX_TEXT_VERTS do count = MAX_TEXT_VERTS
 
-	dst := ([^]Text_Vert)(t.frames[frame].mapped)
-	for i in 0 ..< count do dst[i] = t.cpu_verts[i]
+	sg.update_buffer(t.vbuf, {ptr = raw_data(t.cpu_verts), size = uint(count) * size_of(Text_Vert)})
 
-	pc := Text_PC{screen = {f32(r.swapchain_extent.width), f32(r.swapchain_extent.height)}}
-	vk.CmdBindPipeline(cb, .GRAPHICS, t.pipeline)
-	vk.CmdPushConstants(cb, t.pipeline_layout, {.VERTEX}, 0, size_of(Text_PC), &pc)
+	sg.apply_pipeline(t.pipeline)
 
-	offset := vk.DeviceSize(0)
-	vbuf := t.frames[frame].vbuf
-	vk.CmdBindVertexBuffers(cb, 0, 1, &vbuf, &offset)
+	uni := Text_Uniforms{screen = {f32(r.width), f32(r.height)}}
 
 	first := u32(0)
 	remaining := u32(count)
@@ -420,11 +250,15 @@ text_record :: proc(t: ^Text_Renderer, r: ^Renderer, cb: vk.CommandBuffer) {
 		if draw > remaining do draw = remaining
 		sw := batch.scissor[2]; if sw < 0 do sw = 0
 		sh := batch.scissor[3]; if sh < 0 do sh = 0
-		rect := vk.Rect2D{offset = {batch.scissor[0], batch.scissor[1]}, extent = {u32(sw), u32(sh)}}
-		vk.CmdSetScissor(cb, 0, 1, &rect)
-		ds := t.atlases[batch.font].desc_set
-		vk.CmdBindDescriptorSets(cb, .GRAPHICS, t.pipeline_layout, 0, 1, &ds, 0, nil)
-		vk.CmdDraw(cb, draw, 1, first, 0)
+		sg.apply_scissor_rect(batch.scissor[0], batch.scissor[1], sw, sh, true)
+
+		bind := sg.Bindings{}
+		bind.vertex_buffers[0] = t.vbuf
+		bind.images[0]         = t.atlases[batch.font].image
+		bind.samplers[0]       = t.sampler
+		sg.apply_bindings(bind)
+		sg.apply_uniforms(0, {ptr = &uni, size = size_of(Text_Uniforms)})
+		sg.draw(int(first), int(draw), 1)
 		first += draw
 		remaining -= draw
 	}

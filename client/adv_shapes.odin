@@ -2,7 +2,7 @@ package main
 
 import "core:math"
 
-import vk "vendor:vulkan"
+import sg "sokol/gfx"
 
 MAX_SHAPE_VERTS :: 16384
 SHAPE_AA_PAD    :: 1.5
@@ -10,9 +10,6 @@ SHAPE_AA_PAD    :: 1.5
 SHAPE_TYPE_RECT    :: 0.0
 SHAPE_TYPE_CIRCLE  :: 1.0
 SHAPE_TYPE_CAPSULE :: 2.0
-
-SHAPES_VERT_SPV := #load("shaders/shapes.vert.spv")
-SHAPES_FRAG_SPV := #load("shaders/shapes.frag.spv")
 
 Shape_Vert :: struct {
 	pos:    [2]f32,
@@ -22,16 +19,12 @@ Shape_Vert :: struct {
 	type:   f32,
 }
 
-Shape_PC :: struct #packed {
+// std140-friendly: 3 vec2s tightly packed (24 bytes) padded to 32 (vec4 multiple).
+Shape_Uniforms :: struct {
 	screen:      [2]f32,
 	view_scale:  [2]f32,
 	view_offset: [2]f32,
-}
-
-Shape_Frame_Buffer :: struct {
-	vbuf:   vk.Buffer,
-	memory: vk.DeviceMemory,
-	mapped: rawptr,
+	_pad:        [2]f32,
 }
 
 Shape_Batch :: struct {
@@ -42,9 +35,9 @@ Shape_Batch :: struct {
 }
 
 Shape_Renderer :: struct {
-	pipeline_layout:     vk.PipelineLayout,
-	pipeline:            vk.Pipeline,
-	frames:              [MAX_FRAMES_IN_FLIGHT]Shape_Frame_Buffer,
+	pipeline:            sg.Pipeline,
+	shader:              sg.Shader,
+	vbuf:                sg.Buffer,
 	cpu_verts:           [dynamic]Shape_Vert,
 	batches:             [dynamic]Shape_Batch,
 	current_scissor:     [4]i32,
@@ -52,30 +45,66 @@ Shape_Renderer :: struct {
 	current_view_offset: [2]f32,
 }
 
-shapes_init :: proc(s: ^Shape_Renderer, r: ^Renderer) -> bool {
-	if !shapes_create_pipeline(s, r) do return false
-	for i in 0 ..< MAX_FRAMES_IN_FLIGHT {
-		ok := create_buffer(
-			r,
-			vk.DeviceSize(MAX_SHAPE_VERTS * size_of(Shape_Vert)),
-			{.VERTEX_BUFFER},
-			{.HOST_VISIBLE, .HOST_COHERENT},
-			&s.frames[i].vbuf,
-			&s.frames[i].memory,
-		)
-		if !ok do return false
-		vk.MapMemory(r.device, s.frames[i].memory, 0, vk.DeviceSize(vk.WHOLE_SIZE), {}, &s.frames[i].mapped)
+shapes_init :: proc(s: ^Shape_Renderer) -> bool {
+	s.vbuf = sg.make_buffer({
+		size  = MAX_SHAPE_VERTS * size_of(Shape_Vert),
+		usage = .STREAM,
+		type  = .VERTEXBUFFER,
+		label = "shapes-vbuf",
+	})
+
+	shader_desc := sg.Shader_Desc{
+		vertex_func   = {source = select_shader_source(SHAPES_VS_GLCORE, SHAPES_VS_GLES3)},
+		fragment_func = {source = select_shader_source(SHAPES_FS_GLCORE, SHAPES_FS_GLES3)},
+		label         = "shapes-shader",
 	}
+	shader_desc.attrs[0] = {glsl_name = "in_pos"}
+	shader_desc.attrs[1] = {glsl_name = "in_local"}
+	shader_desc.attrs[2] = {glsl_name = "in_params"}
+	shader_desc.attrs[3] = {glsl_name = "in_color"}
+	shader_desc.attrs[4] = {glsl_name = "in_type"}
+	shader_desc.uniform_blocks[0] = {
+		stage  = .VERTEX,
+		size   = size_of(Shape_Uniforms),
+		layout = .STD140,
+	}
+	shader_desc.uniform_blocks[0].glsl_uniforms[0] = {type = .FLOAT2, glsl_name = "screen"}
+	shader_desc.uniform_blocks[0].glsl_uniforms[1] = {type = .FLOAT2, glsl_name = "view_scale"}
+	shader_desc.uniform_blocks[0].glsl_uniforms[2] = {type = .FLOAT2, glsl_name = "view_offset"}
+	s.shader = sg.make_shader(shader_desc)
+
+	pip_desc := sg.Pipeline_Desc{
+		shader         = s.shader,
+		primitive_type = .TRIANGLES,
+		index_type     = .NONE,
+		cull_mode      = .NONE,
+		label          = "shapes-pipeline",
+	}
+	pip_desc.layout.buffers[0] = {stride = size_of(Shape_Vert)}
+	pip_desc.layout.attrs[0] = {buffer_index = 0, offset = i32(offset_of(Shape_Vert, pos)),    format = .FLOAT2}
+	pip_desc.layout.attrs[1] = {buffer_index = 0, offset = i32(offset_of(Shape_Vert, local)),  format = .FLOAT2}
+	pip_desc.layout.attrs[2] = {buffer_index = 0, offset = i32(offset_of(Shape_Vert, params)), format = .FLOAT2}
+	pip_desc.layout.attrs[3] = {buffer_index = 0, offset = i32(offset_of(Shape_Vert, color)),  format = .FLOAT4}
+	pip_desc.layout.attrs[4] = {buffer_index = 0, offset = i32(offset_of(Shape_Vert, type)),   format = .FLOAT}
+	pip_desc.colors[0] = {
+		blend = {
+			enabled          = true,
+			src_factor_rgb   = .SRC_ALPHA,
+			dst_factor_rgb   = .ONE_MINUS_SRC_ALPHA,
+			op_rgb           = .ADD,
+			src_factor_alpha = .ONE,
+			dst_factor_alpha = .ONE_MINUS_SRC_ALPHA,
+			op_alpha         = .ADD,
+		},
+	}
+	s.pipeline = sg.make_pipeline(pip_desc)
 	return true
 }
 
-shapes_shutdown :: proc(s: ^Shape_Renderer, r: ^Renderer) {
-	for i in 0 ..< MAX_FRAMES_IN_FLIGHT {
-		if s.frames[i].vbuf != 0 do vk.DestroyBuffer(r.device, s.frames[i].vbuf, nil)
-		if s.frames[i].memory != 0 do vk.FreeMemory(r.device, s.frames[i].memory, nil)
-	}
-	if s.pipeline != 0 do vk.DestroyPipeline(r.device, s.pipeline, nil)
-	if s.pipeline_layout != 0 do vk.DestroyPipelineLayout(r.device, s.pipeline_layout, nil)
+shapes_shutdown :: proc(s: ^Shape_Renderer) {
+	sg.destroy_pipeline(s.pipeline)
+	sg.destroy_shader(s.shader)
+	sg.destroy_buffer(s.vbuf)
 	delete(s.cpu_verts)
 	delete(s.batches)
 }
@@ -105,107 +134,6 @@ shapes_active_batch :: proc(s: ^Shape_Renderer) -> ^Shape_Batch {
 		n = len(s.batches)
 	}
 	return &s.batches[n-1]
-}
-
-shapes_create_pipeline :: proc(s: ^Shape_Renderer, r: ^Renderer) -> bool {
-	vert_mod, ok1 := create_shader_module(r.device, SHAPES_VERT_SPV)
-	if !ok1 do return false
-	defer vk.DestroyShaderModule(r.device, vert_mod, nil)
-	frag_mod, ok2 := create_shader_module(r.device, SHAPES_FRAG_SPV)
-	if !ok2 do return false
-	defer vk.DestroyShaderModule(r.device, frag_mod, nil)
-
-	stages := [2]vk.PipelineShaderStageCreateInfo{
-		{sType = .PIPELINE_SHADER_STAGE_CREATE_INFO, stage = {.VERTEX},   module = vert_mod, pName = "main"},
-		{sType = .PIPELINE_SHADER_STAGE_CREATE_INFO, stage = {.FRAGMENT}, module = frag_mod, pName = "main"},
-	}
-
-	binding := vk.VertexInputBindingDescription{binding = 0, stride = size_of(Shape_Vert), inputRate = .VERTEX}
-	attrs := [5]vk.VertexInputAttributeDescription{
-		{location = 0, binding = 0, format = .R32G32_SFLOAT,       offset = u32(offset_of(Shape_Vert, pos))},
-		{location = 1, binding = 0, format = .R32G32_SFLOAT,       offset = u32(offset_of(Shape_Vert, local))},
-		{location = 2, binding = 0, format = .R32G32_SFLOAT,       offset = u32(offset_of(Shape_Vert, params))},
-		{location = 3, binding = 0, format = .R32G32B32A32_SFLOAT, offset = u32(offset_of(Shape_Vert, color))},
-		{location = 4, binding = 0, format = .R32_SFLOAT,          offset = u32(offset_of(Shape_Vert, type))},
-	}
-	vertex_input := vk.PipelineVertexInputStateCreateInfo{
-		sType                           = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-		vertexBindingDescriptionCount   = 1,
-		pVertexBindingDescriptions      = &binding,
-		vertexAttributeDescriptionCount = u32(len(attrs)),
-		pVertexAttributeDescriptions    = raw_data(attrs[:]),
-	}
-	input_assembly := vk.PipelineInputAssemblyStateCreateInfo{
-		sType    = .PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-		topology = .TRIANGLE_LIST,
-	}
-	dynamic_states := [2]vk.DynamicState{.VIEWPORT, .SCISSOR}
-	dynamic_state := vk.PipelineDynamicStateCreateInfo{
-		sType             = .PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-		dynamicStateCount = 2,
-		pDynamicStates    = raw_data(dynamic_states[:]),
-	}
-	viewport_state := vk.PipelineViewportStateCreateInfo{
-		sType         = .PIPELINE_VIEWPORT_STATE_CREATE_INFO,
-		viewportCount = 1,
-		scissorCount  = 1,
-	}
-	rasterizer := vk.PipelineRasterizationStateCreateInfo{
-		sType       = .PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-		polygonMode = .FILL,
-		cullMode    = {},
-		frontFace   = .CLOCKWISE,
-		lineWidth   = 1.0,
-	}
-	multisampling := vk.PipelineMultisampleStateCreateInfo{
-		sType                = .PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-		rasterizationSamples = {._1},
-		minSampleShading     = 1.0,
-	}
-	color_blend_attach := vk.PipelineColorBlendAttachmentState{
-		blendEnable         = true,
-		srcColorBlendFactor = .SRC_ALPHA,
-		dstColorBlendFactor = .ONE_MINUS_SRC_ALPHA,
-		colorBlendOp        = .ADD,
-		srcAlphaBlendFactor = .ONE,
-		dstAlphaBlendFactor = .ONE_MINUS_SRC_ALPHA,
-		alphaBlendOp        = .ADD,
-		colorWriteMask      = {.R, .G, .B, .A},
-	}
-	color_blend := vk.PipelineColorBlendStateCreateInfo{
-		sType           = .PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-		attachmentCount = 1,
-		pAttachments    = &color_blend_attach,
-	}
-
-	pc_range := vk.PushConstantRange{
-		stageFlags = {.VERTEX},
-		offset     = 0,
-		size       = size_of(Shape_PC),
-	}
-	layout_info := vk.PipelineLayoutCreateInfo{
-		sType                  = .PIPELINE_LAYOUT_CREATE_INFO,
-		pushConstantRangeCount = 1,
-		pPushConstantRanges    = &pc_range,
-	}
-	if !vk_check(vk.CreatePipelineLayout(r.device, &layout_info, nil, &s.pipeline_layout), "shapes PipelineLayout") do return false
-
-	info := vk.GraphicsPipelineCreateInfo{
-		sType               = .GRAPHICS_PIPELINE_CREATE_INFO,
-		stageCount          = 2,
-		pStages             = raw_data(stages[:]),
-		pVertexInputState   = &vertex_input,
-		pInputAssemblyState = &input_assembly,
-		pViewportState      = &viewport_state,
-		pRasterizationState = &rasterizer,
-		pMultisampleState   = &multisampling,
-		pColorBlendState    = &color_blend,
-		pDynamicState       = &dynamic_state,
-		layout              = s.pipeline_layout,
-		renderPass          = r.render_pass,
-		subpass             = 0,
-	}
-	return vk_check(vk.CreateGraphicsPipelines(r.device, 0, 1, &info, nil, &s.pipeline), "shapes GraphicsPipeline")
 }
 
 @(private="file")
@@ -281,8 +209,7 @@ shapes_push_line :: proc(s: ^Shape_Renderer, ax, ay, bx, by, thickness: f32, col
 	)
 }
 
-shapes_record :: proc(s: ^Shape_Renderer, r: ^Renderer, cb: vk.CommandBuffer) {
-	frame := r.current_frame
+shapes_record :: proc(s: ^Shape_Renderer, r: ^Renderer) {
 	count := len(s.cpu_verts)
 	if count == 0 {
 		clear(&s.batches)
@@ -290,16 +217,14 @@ shapes_record :: proc(s: ^Shape_Renderer, r: ^Renderer, cb: vk.CommandBuffer) {
 	}
 	if count > MAX_SHAPE_VERTS do count = MAX_SHAPE_VERTS
 
-	dst := ([^]Shape_Vert)(s.frames[frame].mapped)
-	for i in 0 ..< count do dst[i] = s.cpu_verts[i]
+	sg.update_buffer(s.vbuf, {ptr = raw_data(s.cpu_verts), size = uint(count) * size_of(Shape_Vert)})
 
-	screen := [2]f32{f32(r.swapchain_extent.width), f32(r.swapchain_extent.height)}
-	vk.CmdBindPipeline(cb, .GRAPHICS, s.pipeline)
+	bind := sg.Bindings{}
+	bind.vertex_buffers[0] = s.vbuf
+	sg.apply_pipeline(s.pipeline)
+	sg.apply_bindings(bind)
 
-	offset := vk.DeviceSize(0)
-	vbuf := s.frames[frame].vbuf
-	vk.CmdBindVertexBuffers(cb, 0, 1, &vbuf, &offset)
-
+	screen := [2]f32{f32(r.width), f32(r.height)}
 	first := u32(0)
 	remaining := u32(count)
 	for batch in s.batches {
@@ -308,15 +233,15 @@ shapes_record :: proc(s: ^Shape_Renderer, r: ^Renderer, cb: vk.CommandBuffer) {
 		if draw > remaining do draw = remaining
 		sw := batch.scissor[2]; if sw < 0 do sw = 0
 		sh := batch.scissor[3]; if sh < 0 do sh = 0
-		rect := vk.Rect2D{offset = {batch.scissor[0], batch.scissor[1]}, extent = {u32(sw), u32(sh)}}
-		vk.CmdSetScissor(cb, 0, 1, &rect)
-		pc := Shape_PC{
+		sg.apply_scissor_rect(batch.scissor[0], batch.scissor[1], sw, sh, true)
+
+		uni := Shape_Uniforms{
 			screen      = screen,
 			view_scale  = batch.view_scale,
 			view_offset = batch.view_offset,
 		}
-		vk.CmdPushConstants(cb, s.pipeline_layout, {.VERTEX}, 0, size_of(Shape_PC), &pc)
-		vk.CmdDraw(cb, draw, 1, first, 0)
+		sg.apply_uniforms(0, {ptr = &uni, size = size_of(Shape_Uniforms)})
+		sg.draw(int(first), int(draw), 1)
 		first += draw
 		remaining -= draw
 	}

@@ -1,46 +1,45 @@
 package main
 
-import vk "vendor:vulkan"
+import sg    "sokol/gfx"
+import sglue "sokol/glue"
 
 Graphics :: struct {
 	renderer:           ^Renderer,
 	bg:                 Background_Renderer,
 	shapes:             Shape_Renderer,
 	text:               Text_Renderer,
-	cb:                 vk.CommandBuffer,
 	scissor_stack:      [dynamic][4]i32,
 	world_view_scale:   [2]f32,
 	world_view_offset:  [2]f32,
+	bg_time:            f32,
 }
 
 gfx_init :: proc(g: ^Graphics, r: ^Renderer) -> bool {
 	g.renderer = r
-	if !background_init(&g.bg, r) do return false
-	if !shapes_init(&g.shapes, r) do return false
-	if !text_init(&g.text, r) do return false
+	if !background_init(&g.bg) do return false
+	if !shapes_init(&g.shapes) do return false
+	if !text_init(&g.text) do return false
 	return true
 }
 
 gfx_shutdown :: proc(g: ^Graphics) {
 	if g.renderer == nil do return
-	vk.DeviceWaitIdle(g.renderer.device)
-	text_shutdown(&g.text, g.renderer)
-	shapes_shutdown(&g.shapes, g.renderer)
-	background_shutdown(&g.bg, g.renderer)
+	text_shutdown(&g.text)
+	shapes_shutdown(&g.shapes)
+	background_shutdown(&g.bg)
 	delete(g.scissor_stack)
 }
 
-gfx_begin :: proc(g: ^Graphics) -> bool {
-	cb, ok := renderer_begin_frame(g.renderer)
-	if !ok do return false
-	g.cb = cb
+gfx_begin :: proc(g: ^Graphics, dt: f32) -> bool {
+	renderer_update_size(g.renderer)
+	w := g.renderer.width
+	h := g.renderer.height
+	if w <= 0 || h <= 0 do return false
+
+	g.bg_time += dt
 
 	clear(&g.scissor_stack)
-	full := [4]i32{
-		0, 0,
-		i32(g.renderer.swapchain_extent.width),
-		i32(g.renderer.swapchain_extent.height),
-	}
+	full := [4]i32{0, 0, w, h}
 	append(&g.scissor_stack, full)
 	shapes_set_scissor(&g.shapes, full)
 	shapes_set_view(&g.shapes, {1, 1}, {0, 0})
@@ -51,8 +50,8 @@ gfx_begin :: proc(g: ^Graphics) -> bool {
 }
 
 gfx_set_camera :: proc(g: ^Graphics, cam: ^Camera) {
-	sw := f32(g.renderer.swapchain_extent.width)
-	sh := f32(g.renderer.swapchain_extent.height)
+	sw := f32(g.renderer.width)
+	sh := f32(g.renderer.height)
 	scale := [2]f32{cam.zoom, cam.zoom}
 	offset := [2]f32{sw * 0.5 - cam.pos.x * cam.zoom, sh * 0.5 - cam.pos.y * cam.zoom}
 	g.world_view_scale  = scale
@@ -65,18 +64,35 @@ gfx_clear_camera :: proc(g: ^Graphics) {
 }
 
 gfx_end :: proc(g: ^Graphics) {
-	background_record(&g.bg, g.renderer, g.cb, g.world_view_scale, g.world_view_offset)
-	shapes_record(&g.shapes, g.renderer, g.cb)
-	text_record(&g.text, g.renderer, g.cb)
-	renderer_end_frame(g.renderer)
+	pass := sg.Pass{
+		swapchain = sglue.swapchain(),
+		action    = sg.Pass_Action{
+			colors = {
+				0 = {
+					load_action = .CLEAR,
+					clear_value = {
+						g.renderer.clear_color.r,
+						g.renderer.clear_color.g,
+						g.renderer.clear_color.b,
+						g.renderer.clear_color.a,
+					},
+				},
+			},
+		},
+	}
+	sg.begin_pass(pass)
+
+	background_record(&g.bg, g.renderer, g.world_view_scale, g.world_view_offset, g.bg_time)
+	shapes_record(&g.shapes, g.renderer)
+	text_record(&g.text, g.renderer)
+
+	sg.end_pass()
+	sg.commit()
 }
 
 gfx_push_scissor :: proc(g: ^Graphics, x, y, w, h: f32) {
 	parent := g.scissor_stack[len(g.scissor_stack) - 1]
-	nx := i32(x)
-	ny := i32(y)
-	nw := i32(w)
-	nh := i32(h)
+	nx := i32(x); ny := i32(y); nw := i32(w); nh := i32(h)
 	x0 := max(parent[0], nx)
 	y0 := max(parent[1], ny)
 	x1 := min(parent[0] + parent[2], nx + nw)

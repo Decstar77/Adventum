@@ -1,6 +1,6 @@
 package main
 
-import "vendor:glfw"
+import sapp "sokol/app"
 
 LAYOUT_FILL :: f32(-1)
 
@@ -25,37 +25,55 @@ Layout_Frame :: struct {
 }
 
 UI :: struct {
-	mouse:          [2]f32,
-	mouse_down:     bool,
-	mouse_was_down: bool,
-	scroll_dy:      f32,
-	layouts:        [dynamic]Layout_Frame,
+	mouse:           [2]f32,
+	mouse_down:      bool,
+	mouse_was_down:  bool,
+	rmb_down:        bool,
+	rmb_was_down:    bool,
+	scroll_dy:       f32,
+	scroll_accum:    f32,
+	layouts:         [dynamic]Layout_Frame,
 }
 
-@(private="file") g_scroll_accum: f64
-
-ui_init :: proc(ui: ^UI, window: glfw.WindowHandle) {
-	glfw.SetWindowUserPointer(window, ui)
-	glfw.SetScrollCallback(window, ui_scroll_cb)
-}
+ui_init :: proc(ui: ^UI) {}
 
 ui_shutdown :: proc(ui: ^UI) {
 	delete(ui.layouts)
 }
 
-@(private="file")
-ui_scroll_cb :: proc "c" (window: glfw.WindowHandle, xoff, yoff: f64) {
-	g_scroll_accum += yoff
+ui_handle_event :: proc(ui: ^UI, ev: ^sapp.Event) {
+	#partial switch ev.type {
+	case .MOUSE_MOVE:
+		ui.mouse = {ev.mouse_x, ev.mouse_y}
+	case .MOUSE_DOWN:
+		ui.mouse = {ev.mouse_x, ev.mouse_y}
+		#partial switch ev.mouse_button {
+		case .LEFT:  ui.mouse_down = true
+		case .RIGHT: ui.rmb_down = true
+		}
+	case .MOUSE_UP:
+		ui.mouse = {ev.mouse_x, ev.mouse_y}
+		#partial switch ev.mouse_button {
+		case .LEFT:  ui.mouse_down = false
+		case .RIGHT: ui.rmb_down = false
+		}
+	case .MOUSE_SCROLL:
+		ui.scroll_accum += ev.scroll_y
+	}
 }
 
-ui_update :: proc(ui: ^UI, window: glfw.WindowHandle) {
-	x, y := glfw.GetCursorPos(window)
-	ui.mouse = {f32(x), f32(y)}
+ui_update :: proc(ui: ^UI) {
 	ui.mouse_was_down = ui.mouse_down
-	ui.mouse_down = glfw.GetMouseButton(window, glfw.MOUSE_BUTTON_LEFT) == glfw.PRESS
-	ui.scroll_dy = f32(g_scroll_accum)
-	g_scroll_accum = 0
+	ui.rmb_was_down   = ui.rmb_down
+	ui.scroll_dy      = ui.scroll_accum
+	ui.scroll_accum   = 0
 	clear(&ui.layouts)
+}
+
+// Edge state read at end of frame (after game logic). Kept simple:
+ui_post_update :: proc(ui: ^UI) {
+	ui.mouse_was_down = ui.mouse_down
+	ui.rmb_was_down   = ui.rmb_down
 }
 
 ui_mouse_released :: proc(ui: ^UI) -> bool {
@@ -64,6 +82,10 @@ ui_mouse_released :: proc(ui: ^UI) -> bool {
 
 ui_mouse_just_pressed :: proc(ui: ^UI) -> bool {
 	return ui.mouse_down && !ui.mouse_was_down
+}
+
+ui_rmb_just_pressed :: proc(ui: ^UI) -> bool {
+	return ui.rmb_down && !ui.rmb_was_down
 }
 
 point_in_rect :: proc(p: [2]f32, x, y, w, h: f32) -> bool {
