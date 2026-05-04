@@ -27,6 +27,10 @@ App :: struct {
 	hover_smoothed:      [2]f32,
 	hover_smoothed_init: bool,
 
+	rmb_drag_last:    [2]f32,
+	rmb_drag_total:   f32,
+	rmb_dragged:      bool,
+
 	tick_accum:       f64,
 	last_time:        f64,
 	fps_accum:        f64,
@@ -82,7 +86,7 @@ init_cb :: proc "c" () {
 	ui_init(&app.ui)
 	input_init(&app.input)
 
-	app.cam = Camera{pos = {0, 0}, zoom = 1}
+	app.cam = Camera{pos = {0, 0}, target = {0, 0}, zoom = 1}
 	world_init(&app.world)
 	app.selected_kind = .Farm
 
@@ -158,7 +162,7 @@ frame_cb :: proc "c" () {
 	if input_is_down(input, .A) do pan.x -= 1
 	if input_is_down(input, .D) do pan.x += 1
 	if pan.x != 0 || pan.y != 0 {
-		cam.pos += pan * (PAN_SPEED * dt / cam.zoom)
+		cam.target += pan * (PAN_SPEED * dt / cam.zoom)
 	}
 
 	if ui.mouse.x >= 0 && ui.mouse.y >= 0 && ui.mouse.x < sw && ui.mouse.y < sh {
@@ -168,8 +172,24 @@ frame_cb :: proc "c" () {
 		if ui.mouse.y < EDGE_MARGIN          do edge.y = -(1 - ui.mouse.y / EDGE_MARGIN)
 		else if ui.mouse.y > sh - EDGE_MARGIN do edge.y =  1 - (sh - ui.mouse.y) / EDGE_MARGIN
 		if edge.x != 0 || edge.y != 0 {
-			cam.pos += edge * (EDGE_PAN_SPEED * dt / cam.zoom)
+			cam.target += edge * (EDGE_PAN_SPEED * dt / cam.zoom)
 		}
+	}
+
+	RMB_DRAG_THRESHOLD :: f32(4)
+	if ui.rmb_down && !ui.rmb_was_down {
+		app.rmb_drag_last = ui.mouse
+		app.rmb_drag_total = 0
+		app.rmb_dragged = false
+	} else if ui.rmb_down {
+		d := ui.mouse - app.rmb_drag_last
+		app.rmb_drag_total += abs(d.x) + abs(d.y)
+		if app.rmb_drag_total > RMB_DRAG_THRESHOLD do app.rmb_dragged = true
+		if app.rmb_dragged {
+			cam.pos    -= d / cam.zoom
+			cam.target -= d / cam.zoom
+		}
+		app.rmb_drag_last = ui.mouse
 	}
 
 	if ui.scroll_dy != 0 {
@@ -179,8 +199,12 @@ frame_cb :: proc "c" () {
 		if cam.zoom < 0.1 do cam.zoom = 0.1
 		if cam.zoom > 8   do cam.zoom = 8
 		after := camera_screen_to_world(cam, ui.mouse, sw, sh)
-		cam.pos += before - after
+		delta := before - after
+		cam.pos += delta
+		cam.target += delta
 	}
+
+	camera_update(cam, dt)
 
 	for k, i in HOTKEYS {
 		if input_just_pressed(input, k) {
@@ -209,7 +233,7 @@ frame_cb :: proc "c" () {
 		world^ = World{}
 		world_init(world)
 		world_tick(world, 0)
-		cam^ = Camera{pos = {0, 0}, zoom = 1}
+		cam^ = Camera{pos = {0, 0}, target = {0, 0}, zoom = 1}
 		app.selected_kind = .Farm
 		app.mode = .Default
 		app.tick_accum = 0
@@ -251,7 +275,7 @@ frame_cb :: proc "c" () {
 	hover := pixel_to_hex(mouse_world)
 
 	lmb_just := ui_mouse_just_pressed(ui)
-	rmb_just := ui_rmb_just_pressed(ui)
+	rmb_click := !ui.rmb_down && ui.rmb_was_down && !app.rmb_dragged
 	shift_held := input_is_down(input, .LEFT_SHIFT) || input_is_down(input, .RIGHT_SHIFT)
 	if !mouse_in_picker && !mouse_in_panel && !world.game_over {
 		if lmb_just && app.mode == .Place {
@@ -266,7 +290,7 @@ frame_cb :: proc "c" () {
 				app.has_selection = false
 			}
 		}
-		if rmb_just {
+		if rmb_click {
 			if app.mode == .Place {
 				app.mode = .Default
 			} else {

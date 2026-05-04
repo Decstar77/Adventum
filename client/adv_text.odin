@@ -1,12 +1,13 @@
 package main
 
 import "core:fmt"
-import "core:os"
 
 import tt "vendor:stb/truetype"
 import sg "sokol/gfx"
 
 FONT_PATH       :: "res/fonts/SUSEMono-Regular.ttf"
+@(private="file")
+FONT_DATA       := #load(FONT_PATH)
 FONT_PIXEL_SIZE :: 16.0      // legacy alias for the Small atlas; layout math still uses this
 FONT_FIRST_CHAR :: 32
 FONT_NUM_CHARS  :: 95
@@ -64,15 +65,8 @@ Text_Renderer :: struct {
 }
 
 text_init :: proc(t: ^Text_Renderer) -> bool {
-	font_data, ok := os.read_entire_file(FONT_PATH)
-	if !ok {
-		fmt.eprintfln("failed to read font: %s", FONT_PATH)
-		return false
-	}
-	defer delete(font_data)
-
 	for size, i in Font_Size {
-		if !text_bake_atlas(&t.atlases[i], FONT_PIXEL_SIZES[i], font_data) do return false
+		if !text_bake_atlas(&t.atlases[i], FONT_PIXEL_SIZES[i], FONT_DATA) do return false
 	}
 
 	t.sampler = sg.make_sampler({

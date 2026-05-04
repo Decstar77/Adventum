@@ -1,31 +1,42 @@
 @echo off
+setlocal enabledelayedexpansion
+
 rem Web/wasm build via emscripten + Odin's wasm32 freestanding target.
 rem
-rem Prerequisites (one-time):
-rem   1) Install emsdk and run emsdk_env.bat in this shell so emcc is on PATH.
-rem   2) Build the sokol wasm clibs. There is no script for that in this repo;
-rem      grab build_clibs_emcc.sh from the upstream sokol-odin repo and run it
-rem      under emsdk. It produces:
-rem        client/sokol/app/sokol_app_wasm_gl_{debug,release}.a
-rem        client/sokol/gfx/sokol_gfx_wasm_gl_{debug,release}.a
-rem        client/sokol/glue/sokol_glue_wasm_gl_{debug,release}.a
-rem        client/sokol/log/sokol_log_wasm_gl_{debug,release}.a
-rem      Until those are present this build will fail with link errors.
+rem Self-bootstraps: sources the bundled emsdk to put emcc/emar on PATH,
+rem builds the sokol wasm clibs on first run if missing, then compiles
+rem the Odin client to wasm and links via emcc into build\web\index.html.
 rem
-rem   3) Run from a shell with emcc, emar, etc. on PATH.
+rem Prereq: the bundled .\emsdk must already be installed/activated once:
+rem     emsdk\emsdk install latest
+rem     emsdk\emsdk activate latest
 
-if not exist build\web mkdir build\web
+rem 1) Put emcc/emar on PATH for this shell.
+call "%~dp0emsdk\emsdk_env.bat" >nul 2>&1
 
-rem Compile the Odin client to a wasm object file (no linking).
+where emcc >nul 2>nul
+if errorlevel 1 (
+    echo emcc not on PATH after sourcing emsdk_env.bat. Activate emsdk first:
+    echo     emsdk\emsdk install latest ^&^& emsdk\emsdk activate latest
+    exit /b 1
+)
+
+rem 2) Build the sokol wasm clibs if they're missing. Presence of the gfx
+rem    release .a is the sentinel.
+if not exist "%~dp0client\sokol\gfx\sokol_gfx_wasm_gl_release.a" call :build_clibs || exit /b 1
+
+if not exist "%~dp0build\web" mkdir "%~dp0build\web"
+
+rem 3) Compile the Odin client to a wasm object file (no linking).
 odin build client ^
     -target:freestanding_wasm32 ^
     -out:build/web/client.wasm.o ^
     -build-mode:obj ^
     -define:SOKOL_USE_GL=true ^
     -no-entry-point
-if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+if errorlevel 1 exit /b 1
 
-rem Link with emcc, pulling in the sokol wasm clibs and producing index.html.
+rem 4) Link with emcc, pulling in the sokol wasm clibs and producing index.html.
 emcc build\web\client.wasm.o ^
     client\sokol\app\sokol_app_wasm_gl_release.a ^
     client\sokol\gfx\sokol_gfx_wasm_gl_release.a ^
@@ -36,8 +47,23 @@ emcc build\web\client.wasm.o ^
     -sFULL_ES3=1 ^
     -sALLOW_MEMORY_GROWTH=1 ^
     --preload-file res
-if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+if errorlevel 1 exit /b 1
 
 echo.
 echo Built build\web\index.html. Serve it from a local HTTP server, e.g.:
 echo   python -m http.server -d build\web 8000
+
+endlocal
+exit /b 0
+
+:build_clibs
+echo Building sokol wasm clibs ^(one-time^)...
+pushd "%~dp0client\sokol"
+call build_clibs_wasm.bat
+set "CLIB_ERR=%ERRORLEVEL%"
+popd
+if not "%CLIB_ERR%"=="0" (
+    echo sokol wasm clib build failed ^(exit %CLIB_ERR%^).
+    exit /b %CLIB_ERR%
+)
+exit /b 0

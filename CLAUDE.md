@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Windows for native; emscripten for the web. Requires the Odin compiler on PATH. No Vulkan SDK or shader-compile step — sokol_gfx is fed GLSL string constants from `adv_shaders.odin`.
 
 - `build.bat` — `odin build client -debug -out:build/client.exe -define:SOKOL_USE_GL=true`. The `-define:SOKOL_USE_GL=true` flag selects the GL clibs in `client/sokol/**/*.lib` (matched at link time by the bindings' `when` blocks) and is the same flag the Odin code reads to pick GLCORE vs GLES3 shader sources at runtime. There is no test suite or linter.
-- `build_web.bat` — wasm/web build via emscripten. **Requires the sokol wasm clibs**, which aren't checked in: run upstream sokol-odin's `build_clibs_emcc.sh` once under emsdk to produce `sokol/{app,gfx,glue,log}/sokol_*_wasm_gl_*.a`. Until then this script will fail at the link step.
+- `build_web.bat` — wasm/web build via emscripten. Self-bootstraps: sources the bundled `./emsdk/emsdk_env.bat` to put emcc/emar on PATH, then on first run invokes `client/sokol/build_clibs_wasm.bat` to produce the missing `sokol/{app,gfx,glue,log}/sokol_*_wasm_gl_release.a` clibs (sentinel: `sokol_gfx_wasm_gl_release.a`). After that it compiles the Odin client to a wasm object and links via emcc into `build/web/index.html`. The bundled `./emsdk/` must already be installed/activated once (`emsdk install latest && emsdk activate latest`).
 - `run_all.bat` — runs `build.bat` then launches `build/client.exe`.
 
 The `.vscode/tasks.json` and `launch.json` are stale .NET configs from an unrelated project — ignore them.
