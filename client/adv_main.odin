@@ -37,6 +37,8 @@ App :: struct {
 	fps_frames:       int,
 	fps:              f64,
 	frame_ms:         f64,
+
+	frame_count:      u64,
 }
 
 @(private="file") g_app: App
@@ -130,6 +132,12 @@ frame_cb :: proc "c" () {
 	if dt_f <= 0 do dt_f = 1.0 / 60.0
 	if dt_f > 0.1 do dt_f = 0.1
 	dt := f32(dt_f)
+
+	app.frame_count += 1
+	if app.frame_count <= 5 || app.frame_count == 60 {
+		fmt.printfln("[frame %d] sapp_size=%dx%d dpi=%.2f dt=%.4f",
+			app.frame_count, sapp.width(), sapp.height(), sapp.dpi_scale(), dt_f)
+	}
 
 	app.fps_accum += dt_f
 	app.fps_frames += 1
@@ -300,6 +308,10 @@ frame_cb :: proc "c" () {
 	}
 
 	if !gfx_begin(&app.g, dt) {
+		if app.frame_count <= 5 || app.frame_count % 60 == 0 {
+			fmt.eprintfln("[frame %d] gfx_begin returned false (size=%dx%d) — skipping draw",
+				app.frame_count, sapp.width(), sapp.height())
+		}
 		// resize-to-zero or similar; finalize input bookkeeping and return.
 		input_update(input)
 		ui.mouse_was_down = ui.mouse_down

@@ -1,0 +1,5 @@
+warning: undefined symbol: cos (referenced by root reference (e.g. compiled C/C++ code))
+warning: undefined symbol: exp (referenced by root reference (e.g. compiled C/C++ code))
+warning: undefined symbol: sin (referenced by root reference (e.g. compiled C/C++ code))
+warning: undefined symbol: write (referenced by root reference (e.g. compiled C/C++ code))
+emcc: warning: warnings in JS library compilation [-Wjs-compiler]

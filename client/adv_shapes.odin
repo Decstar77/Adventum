@@ -48,8 +48,7 @@ Shape_Renderer :: struct {
 shapes_init :: proc(s: ^Shape_Renderer) -> bool {
 	s.vbuf = sg.make_buffer({
 		size  = MAX_SHAPE_VERTS * size_of(Shape_Vert),
-		usage = .STREAM,
-		type  = .VERTEXBUFFER,
+		usage = {vertex_buffer = true, stream_update = true},
 		label = "shapes-vbuf",
 	})
 

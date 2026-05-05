@@ -1,5 +1,7 @@
 package main
 
+import "core:fmt"
+
 import sg    "sokol/gfx"
 import sapp  "sokol/app"
 import sglue "sokol/glue"
@@ -21,8 +23,13 @@ renderer_init :: proc(r: ^Renderer) -> bool {
 		environment = sglue.environment(),
 		logger      = {func = slog.func},
 	})
-	if !sg.isvalid() do return false
+	if !sg.isvalid() {
+		fmt.eprintln("[renderer] sg.setup failed (sg.isvalid=false)")
+		return false
+	}
 	renderer_update_size(r)
+	fmt.printfln("[renderer] backend=%v initial_size=%dx%d dpi=%.2f",
+		sg.query_backend(), r.width, r.height, sapp.dpi_scale())
 	return true
 }
 

@@ -7,7 +7,7 @@ import sg "sokol/gfx"
 
 FONT_PATH       :: "res/fonts/SUSEMono-Regular.ttf"
 @(private="file")
-FONT_DATA       := #load(FONT_PATH)
+FONT_DATA       := #load("../res/fonts/SUSEMono-Regular.ttf")
 FONT_PIXEL_SIZE :: 16.0      // legacy alias for the Small atlas; layout math still uses this
 FONT_FIRST_CHAR :: 32
 FONT_NUM_CHARS  :: 95
@@ -48,6 +48,7 @@ Text_Batch :: struct {
 Font_Atlas :: struct {
 	chardata:   [FONT_NUM_CHARS]tt.bakedchar,
 	image:      sg.Image,
+	view:       sg.View,
 	pixel_size: f32,
 }
 
@@ -79,8 +80,7 @@ text_init :: proc(t: ^Text_Renderer) -> bool {
 
 	t.vbuf = sg.make_buffer({
 		size  = MAX_TEXT_VERTS * size_of(Text_Vert),
-		usage = .STREAM,
-		type  = .VERTEXBUFFER,
+		usage = {vertex_buffer = true, stream_update = true},
 		label = "text-vbuf",
 	})
 
@@ -98,9 +98,9 @@ text_init :: proc(t: ^Text_Renderer) -> bool {
 		layout = .STD140,
 	}
 	shader_desc.uniform_blocks[0].glsl_uniforms[0] = {type = .FLOAT2, glsl_name = "screen"}
-	shader_desc.images[0]   = {stage = .FRAGMENT, image_type = ._2D, sample_type = .FLOAT}
+	shader_desc.views[0].texture = {stage = .FRAGMENT, image_type = ._2D, sample_type = .FLOAT}
 	shader_desc.samplers[0] = {stage = .FRAGMENT, sampler_type = .FILTERING}
-	shader_desc.image_sampler_pairs[0] = {stage = .FRAGMENT, image_slot = 0, sampler_slot = 0, glsl_name = "u_atlas"}
+	shader_desc.texture_sampler_pairs[0] = {stage = .FRAGMENT, view_slot = 0, sampler_slot = 0, glsl_name = "u_atlas"}
 	t.shader = sg.make_shader(shader_desc)
 
 	pip_desc := sg.Pipeline_Desc{
@@ -134,7 +134,10 @@ text_shutdown :: proc(t: ^Text_Renderer) {
 	sg.destroy_shader(t.shader)
 	sg.destroy_buffer(t.vbuf)
 	sg.destroy_sampler(t.sampler)
-	for &a in t.atlases do sg.destroy_image(a.image)
+	for &a in t.atlases {
+		sg.destroy_view(a.view)
+		sg.destroy_image(a.image)
+	}
 	delete(t.cpu_verts)
 	delete(t.batches)
 }
@@ -183,8 +186,9 @@ text_bake_atlas :: proc(atlas: ^Font_Atlas, pixel_size: f32, font_data: []u8) ->
 		pixel_format = .R8,
 		label        = "font-atlas",
 	}
-	img_desc.data.subimage[0][0] = {ptr = raw_data(pixels), size = ATLAS_W * ATLAS_H}
+	img_desc.data.mip_levels[0] = {ptr = raw_data(pixels), size = ATLAS_W * ATLAS_H}
 	atlas.image = sg.make_image(img_desc)
+	atlas.view  = sg.make_view({texture = {image = atlas.image}, label = "font-atlas-view"})
 	return true
 }
 
@@ -248,7 +252,7 @@ text_record :: proc(t: ^Text_Renderer, r: ^Renderer) {
 
 		bind := sg.Bindings{}
 		bind.vertex_buffers[0] = t.vbuf
-		bind.images[0]         = t.atlases[batch.font].image
+		bind.views[0]          = t.atlases[batch.font].view
 		bind.samplers[0]       = t.sampler
 		sg.apply_bindings(bind)
 		sg.apply_uniforms(0, {ptr = &uni, size = size_of(Text_Uniforms)})

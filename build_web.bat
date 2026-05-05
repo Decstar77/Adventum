@@ -29,23 +29,33 @@ if not exist "%~dp0build\web" mkdir "%~dp0build\web"
 
 rem 3) Compile the Odin client to a wasm object file (no linking).
 odin build client ^
-    -target:freestanding_wasm32 ^
+    -target:js_wasm32 ^
     -out:build/web/client.wasm.o ^
     -build-mode:obj ^
-    -define:SOKOL_USE_GL=true ^
-    -no-entry-point
+    -define:SOKOL_USE_GL=true
 if errorlevel 1 exit /b 1
 
 rem 4) Link with emcc, pulling in the sokol wasm clibs and producing index.html.
+rem Locate Odin's vendored stb wasm objects. ODIN_ROOT lets us avoid hard-coding
+rem the Odin install path; falls back to deriving it from `where odin`.
+if "%ODIN_ROOT%"=="" (
+    for /f "delims=" %%i in ('where odin') do set "ODIN_EXE=%%i"
+    for %%i in ("!ODIN_EXE!") do set "ODIN_ROOT=%%~dpi"
+)
+set "STB_LIB_DIR=%ODIN_ROOT%vendor\stb\lib"
+
 emcc build\web\client.wasm.o ^
     client\sokol\app\sokol_app_wasm_gl_release.a ^
     client\sokol\gfx\sokol_gfx_wasm_gl_release.a ^
     client\sokol\glue\sokol_glue_wasm_gl_release.a ^
     client\sokol\log\sokol_log_wasm_gl_release.a ^
+    "%STB_LIB_DIR%\stb_truetype_wasm.o" ^
     -o build\web\index.html ^
     -sUSE_WEBGL2=1 ^
     -sFULL_ES3=1 ^
     -sALLOW_MEMORY_GROWTH=1 ^
+    -sERROR_ON_UNDEFINED_SYMBOLS=0 ^
+    --pre-js client\web\odin.js ^
     --preload-file res
 if errorlevel 1 exit /b 1
 
@@ -59,7 +69,7 @@ exit /b 0
 :build_clibs
 echo Building sokol wasm clibs ^(one-time^)...
 pushd "%~dp0client\sokol"
-call build_clibs_wasm.bat
+call .\build_clibs_wasm.bat
 set "CLIB_ERR=%ERRORLEVEL%"
 popd
 if not "%CLIB_ERR%"=="0" (
