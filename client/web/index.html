@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Adventum</title>
+<style>
+  html, body { margin: 0; background: #050507; height: 100%; overflow: hidden; }
+  body { display: grid; place-items: center; font-family: monospace; color: #aab; }
+  canvas { display: block; background: #050507; cursor: default; image-rendering: pixelated; }
+  #status { position: fixed; top: 8px; left: 12px; opacity: 0.7; }
+</style>
+</head>
+<body>
+<canvas id="screen" width="1280" height="720" tabindex="0"></canvas>
+<div id="status">loading…</div>
+<script type="module" src="host.js"></script>
+</body>
+</html>
