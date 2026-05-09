@@ -22,7 +22,15 @@ Game :: struct {
 	selected_tile: Hex_Coord,
 	has_selection: bool,
 
-	rmb_was_down: bool,
+	// Right-mouse pan: track the mouse position from last frame so we can
+	// turn movement-while-RMB-held into camera panning. `rmb_drag_total` is
+	// the accumulated pixel distance since RMB went down — if it stays below
+	// RMB_CLICK_THRESHOLD, releasing RMB counts as a click (remove tile /
+	// cancel place mode); otherwise it was a pan and the click is consumed.
+	rmb_was_down:    bool,
+	rmb_drag_total:  f32,
+	prev_mouse:      [2]f32,
+	prev_mouse_init: bool,
 
 	hover_smoothed:      [2]f32,
 	hover_smoothed_init: bool,
@@ -239,9 +247,34 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	mouse_world := camera_screen_to_world(&g.cam, p.mouse, sw, sh)
 	hover := pixel_to_hex(mouse_world)
 
+	// Right-mouse pan. While RMB is held, drag the camera by the mouse
+	// delta (in world units, so the tile under the cursor stays under it).
+	// On release, if the cursor barely moved we treat it as a click and
+	// run the original remove-tile / cancel-place logic.
+	RMB_CLICK_THRESHOLD :: f32(4) // pixels of total drag below which a release counts as a click
+	if !g.prev_mouse_init {
+		g.prev_mouse = p.mouse
+		g.prev_mouse_init = true
+	}
+	mouse_delta := p.mouse - g.prev_mouse
+
+	rmb_clicked := false
+	if p.mouse_right_down {
+		if !g.rmb_was_down {
+			g.rmb_drag_total = 0
+		} else if g.cam.zoom > 0 {
+			// Pan opposite the drag direction so the world feels grabbed.
+			g.cam.pos -= mouse_delta / g.cam.zoom
+		}
+		g.rmb_drag_total += abs(mouse_delta.x) + abs(mouse_delta.y)
+	} else if g.rmb_was_down {
+		// Release.
+		if g.rmb_drag_total < RMB_CLICK_THRESHOLD do rmb_clicked = true
+	}
+	g.rmb_was_down = p.mouse_right_down
+
 	// Place / remove via mouse on the world (suppressed when over the picker bar)
 	lmb_just := p.mouse_left_pressed
-	rmb_just := p.mouse_right_pressed
 	shift_held := p->is_key_down(.Left_Shift) || p->is_key_down(.Right_Shift)
 	if !mouse_in_picker && !mouse_in_panel && !g.world.game_over {
 		if lmb_just && g.mode == .Place {
@@ -256,7 +289,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 				g.has_selection = false
 			}
 		}
-		if rmb_just {
+		if rmb_clicked {
 			if g.mode == .Place {
 				g.mode = .Default
 			} else {
@@ -264,6 +297,8 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 			}
 		}
 	}
+
+	g.prev_mouse = p.mouse
 
 	// Fog-of-war lighting: every tile contributes a world-space halo so the
 	// background's dark fade stays anchored to what the player has built,
