@@ -13,8 +13,11 @@ Graphics :: struct {
 	text:               Text_Renderer,
 	cb:                 vk.CommandBuffer,
 	scissor_stack:      [dynamic][4]i32,
-	world_view_scale:   [2]f32,
-	world_view_offset:  [2]f32,
+	// Latest world-space camera the game set, kept across clear_camera so the
+	// background pass (recorded in gfx_end, after UI has cleared the camera)
+	// still has the right world->screen affine for its world-space lights.
+	bg_view_scale:      [2]f32,
+	bg_view_offset:     [2]f32,
 }
 
 gfx_init :: proc(g: ^Graphics, r: ^Renderer) -> bool {
@@ -49,23 +52,26 @@ gfx_begin :: proc(g: ^Graphics) -> bool {
 	shapes_set_scissor(&g.shapes, full)
 	shapes_set_view(&g.shapes, {1, 1}, {0, 0})
 	text_set_scissor(&g.text, full)
-	g.world_view_scale  = {1, 1}
-	g.world_view_offset = {0, 0}
+	g.bg_view_scale  = {1, 1}
+	g.bg_view_offset = {0, 0}
+	background_clear_lights(&g.bg)
 	return true
 }
 
 gfx_set_view :: proc(g: ^Graphics, scale, offset: [2]f32) {
-	g.world_view_scale  = scale
-	g.world_view_offset = offset
+	g.bg_view_scale  = scale
+	g.bg_view_offset = offset
 	shapes_set_view(&g.shapes, scale, offset)
 }
 
+// Reset shape draws to screen space without forgetting the camera the
+// background needs — the latest set_view stays sticky for gfx_end.
 gfx_clear_view :: proc(g: ^Graphics) {
-	gfx_set_view(g, {1, 1}, {0, 0})
+	shapes_set_view(&g.shapes, {1, 1}, {0, 0})
 }
 
 gfx_end :: proc(g: ^Graphics) {
-	background_record(&g.bg, g.renderer, g.cb, g.world_view_scale, g.world_view_offset)
+	background_record(&g.bg, g.renderer, g.cb, g.bg_view_scale, g.bg_view_offset)
 	shapes_record(&g.shapes, g.renderer, g.cb)
 	text_record(&g.text, g.renderer, g.cb)
 	renderer_end_frame(g.renderer)
@@ -107,4 +113,14 @@ gfx_push_circle :: proc(g: ^Graphics, cx, cy, radius: f32, color: [4]f32) {
 
 gfx_push_line :: proc(g: ^Graphics, ax, ay, bx, by, thickness: f32, color: [4]f32) {
 	shapes_push_line(&g.shapes, ax, ay, bx, by, thickness, color)
+}
+
+// Fog-of-war light points. The background shader draws a soft lit halo around
+// each one in world space, so they pan/zoom with the camera.
+gfx_clear_fog_lights :: proc(g: ^Graphics) {
+	background_clear_lights(&g.bg)
+}
+
+gfx_push_fog_light :: proc(g: ^Graphics, x, y: f32) {
+	background_push_light(&g.bg, x, y)
 }

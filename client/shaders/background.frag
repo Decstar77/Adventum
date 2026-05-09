@@ -2,67 +2,54 @@
 
 layout(location = 0) out vec4 out_color;
 
+#define MAX_FOG_LIGHTS 256
+
 layout(push_constant) uniform PC {
     vec2  screen;
     vec2  view_scale;   // world->screen (camera zoom)
     vec2  view_offset;  // world->screen translation
     float time;
-    float _pad;
+    int   light_count;
+    float light_radius;   // world-space radius of full visibility around each light
+    float light_falloff;  // additional world-space soft falloff distance
 } pc;
 
-float hash21(vec2 p) {
-    p = fract(p * vec2(123.34, 456.21));
-    p += dot(p, p + 45.32);
-    return fract(p.x * p.y);
-}
+// Each light stores its world-space xy in .xy. zw are reserved (radius/intensity later).
+layout(set = 0, binding = 0) uniform Lights {
+    vec4 pos[MAX_FOG_LIGHTS];
+} lights;
 
 void main() {
     vec2 frag    = gl_FragCoord.xy;
     vec2 uv      = frag / pc.screen;
-    float aspect = pc.screen.x / pc.screen.y;
     float t      = pc.time;
 
-    // -------- Base: dark teal radial fade with a slow drift --------
-    vec2 c = (uv - 0.5) * vec2(aspect, 1.0);
-    float vign = smoothstep(0.0, 1.05, length(c));
-    vec3 base = mix(vec3(0.045, 0.115, 0.135),
-                    vec3(0.005, 0.020, 0.030), vign);
-    base += vec3(0.0, 0.006, 0.010) *
-            (0.5 + 0.5 * sin(t * 0.18 + uv.y * 2.6 + uv.x * 1.3));
+    // Lit base: a slow drift on the same dark teal we used to vignette toward.
+    vec3 lit  = vec3(0.045, 0.115, 0.135);
+    lit += vec3(0.0, 0.006, 0.010) *
+           (0.5 + 0.5 * sin(t * 0.18 + uv.y * 2.6 + uv.x * 1.3));
+    vec3 dark = vec3(0.003, 0.008, 0.012);
 
-    // -------- World-space glowing nodes (pan/zoom with the camera) --------
+    // Reverse the camera affine (matches the world-space transform applied to
+    // shapes): world = (frag - offset) / scale. So when the camera pans, the
+    // glow stays anchored to its world-space anchor.
     vec2 world = (frag - pc.view_offset) / pc.view_scale;
-    const float CELL = 96.0; // world units between candidate node sites
-    vec2 cell  = floor(world / CELL);
-    vec2 local = (world - cell * CELL) / CELL - 0.5;
 
-    // float h = hash21(cell + 5.1);
-    // if (h > 0.78) {
-    //     // Jitter the node so it doesn't sit dead-centre in its grid.
-    //     vec2 jitter = (vec2(hash21(cell + 17.3), hash21(cell + 29.7)) - 0.5) * 0.7;
-    //     float r_px  = length(local - jitter) * CELL * pc.view_scale.x;
-    //     float pulse = 0.5 + 0.5 * sin(t * 1.0 + h * 6.2831);
-    //     vec3  ncol  = mix(vec3(0.32, 0.85, 0.95),
-    //                       vec3(0.55, 1.00, 1.00), pulse);
-    //     float core  = 1.0 - smoothstep(1.6, 2.8, r_px);
-    //     float halo  = 1.0 - smoothstep(0.0, 14.0, r_px);
-    //     base += ncol * core * (0.55 + 0.15 * pulse);
-    //     base += ncol * halo * 0.06 * (0.6 + 0.4 * pulse);
-    // }
+    // Fog of war: the lit region is the union of disks around each light. We
+    // collapse that to "distance to the nearest light" and smoothstep it.
+    float min_d = 1e9;
+    int n = pc.light_count;
+    if (n > MAX_FOG_LIGHTS) n = MAX_FOG_LIGHTS;
+    for (int i = 0; i < n; ++i) {
+        vec2 p = lights.pos[i].xy;
+        float d = distance(world, p);
+        if (d < min_d) min_d = d;
+    }
 
-    // -------- Twinkling far-field sparkles (screen-locked, no parallax) --------
-    // {
-    //     const float SCELL = 9.0;
-    //     vec2 sg = floor(frag / SCELL);
-    //     float sh = hash21(sg + 7.3);
-    //     if (sh > 0.992) {
-    //         vec2 jitter = vec2(hash21(sg + 11.1), hash21(sg + 23.7)) * (SCELL - 2.0) + 1.0;
-    //         float dr = length((frag - sg * SCELL) - jitter);
-    //         float tw = 0.5 + 0.5 * sin(t * 1.8 + sh * 47.0);
-    //         float a  = (1.0 - smoothstep(0.0, 1.6, dr)) * tw;
-    //         base += vec3(0.50, 0.78, 0.88) * a * 0.75;
-    //     }
-    // }
+    float r0 = pc.light_radius;
+    float r1 = r0 + max(pc.light_falloff, 1.0);
+    float fade = (n == 0) ? 1.0 : smoothstep(r0, r1, min_d);
 
-    out_color = vec4(base, 1.0);
+    vec3 col = mix(lit, dark, fade);
+    out_color = vec4(col, 1.0);
 }

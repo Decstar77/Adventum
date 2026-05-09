@@ -93,6 +93,8 @@ main :: proc() {
 		clear_camera        = plat_clear_camera,
 		push_scissor        = plat_push_scissor,
 		pop_scissor         = plat_pop_scissor,
+		fog_lights_clear    = plat_fog_lights_clear,
+		fog_lights_push     = plat_fog_lights_push,
 		toggle_fullscreen   = plat_toggle_fullscreen,
 		request_quit        = plat_request_quit,
 	}
@@ -298,6 +300,16 @@ plat_push_scissor :: proc(p: ^game.Platform, x, y, w, h: f32) {
 @(private="file")
 plat_pop_scissor :: proc(p: ^game.Platform) {
 	gfx_pop_scissor(&app_of(p).graphics)
+}
+
+@(private="file")
+plat_fog_lights_clear :: proc(p: ^game.Platform) {
+	gfx_clear_fog_lights(&app_of(p).graphics)
+}
+
+@(private="file")
+plat_fog_lights_push :: proc(p: ^game.Platform, x, y: f32) {
+	gfx_push_fog_light(&app_of(p).graphics, x, y)
 }
 
 @(private="file")

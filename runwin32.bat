@@ -1,5 +1,5 @@
 @echo off
-call build.bat
+call buildwin32.bat
 if %ERRORLEVEL% neq 0 (
     pause
     exit /b %ERRORLEVEL%

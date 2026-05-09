@@ -6,20 +6,135 @@ import vk "vendor:vulkan"
 BACKGROUND_VERT_SPV := #load("../shaders/background.vert.spv")
 BACKGROUND_FRAG_SPV := #load("../shaders/background.frag.spv")
 
+// Hard cap matched in shaders/background.frag. The UBO sizes itself for this
+// many points whether we use them or not — at 16 bytes each, 256 lights = 4 KB,
+// which is well within the spec-mandated 16 KB minimum maxUniformBufferRange.
+MAX_FOG_LIGHTS :: 256
+
+// Default world-space radii. The lit disk reaches out to FOG_LIGHT_RADIUS at
+// full strength and softly falls off over an additional FOG_LIGHT_FALLOFF.
+// Tuned against the hex grid (HEX_SIZE = 28 ⇒ ~48 world units between centres).
+FOG_LIGHT_RADIUS  :: f32(120)
+FOG_LIGHT_FALLOFF :: f32(180)
+
 Background_PC :: struct #packed {
-	screen:      [2]f32,
-	view_scale:  [2]f32,
-	view_offset: [2]f32,
-	time:        f32,
-	_pad:        f32,
+	screen:        [2]f32,
+	view_scale:    [2]f32,
+	view_offset:   [2]f32,
+	time:          f32,
+	light_count:   i32,
+	light_radius:  f32,
+	light_falloff: f32,
+}
+
+// Per-frame-in-flight UBO + descriptor set for the lights array.
+Fog_Frame :: struct {
+	buf:    vk.Buffer,
+	mem:    vk.DeviceMemory,
+	mapped: rawptr,
+	set:    vk.DescriptorSet,
 }
 
 Background_Renderer :: struct {
 	pipeline_layout: vk.PipelineLayout,
 	pipeline:        vk.Pipeline,
+
+	desc_layout:     vk.DescriptorSetLayout,
+	desc_pool:       vk.DescriptorPool,
+	frames:          [MAX_FRAMES_IN_FLIGHT]Fog_Frame,
+
+	// CPU-side per-frame collection of light positions (.xy used; zw reserved).
+	lights:          [dynamic][4]f32,
+	light_radius:    f32,
+	light_falloff:   f32,
 }
 
 background_init :: proc(b: ^Background_Renderer, r: ^Renderer) -> bool {
+	b.light_radius  = FOG_LIGHT_RADIUS
+	b.light_falloff = FOG_LIGHT_FALLOFF
+
+	if !background_create_descriptor_layout(b, r) do return false
+	if !background_create_descriptor_pool(b, r) do return false
+	if !background_create_frame_resources(b, r) do return false
+	if !background_create_pipeline(b, r) do return false
+	return true
+}
+
+@(private="file")
+background_create_descriptor_layout :: proc(b: ^Background_Renderer, r: ^Renderer) -> bool {
+	binding := vk.DescriptorSetLayoutBinding{
+		binding         = 0,
+		descriptorType  = .UNIFORM_BUFFER,
+		descriptorCount = 1,
+		stageFlags      = {.FRAGMENT},
+	}
+	info := vk.DescriptorSetLayoutCreateInfo{
+		sType        = .DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+		bindingCount = 1,
+		pBindings    = &binding,
+	}
+	return vk_check(vk.CreateDescriptorSetLayout(r.device, &info, nil, &b.desc_layout), "background DescriptorSetLayout")
+}
+
+@(private="file")
+background_create_descriptor_pool :: proc(b: ^Background_Renderer, r: ^Renderer) -> bool {
+	pool_size := vk.DescriptorPoolSize{
+		type            = .UNIFORM_BUFFER,
+		descriptorCount = u32(MAX_FRAMES_IN_FLIGHT),
+	}
+	info := vk.DescriptorPoolCreateInfo{
+		sType         = .DESCRIPTOR_POOL_CREATE_INFO,
+		maxSets       = u32(MAX_FRAMES_IN_FLIGHT),
+		poolSizeCount = 1,
+		pPoolSizes    = &pool_size,
+	}
+	return vk_check(vk.CreateDescriptorPool(r.device, &info, nil, &b.desc_pool), "background DescriptorPool")
+}
+
+@(private="file")
+background_create_frame_resources :: proc(b: ^Background_Renderer, r: ^Renderer) -> bool {
+	ubo_size := vk.DeviceSize(MAX_FOG_LIGHTS * size_of([4]f32))
+	for i in 0 ..< MAX_FRAMES_IN_FLIGHT {
+		ok := create_buffer(
+			r,
+			ubo_size,
+			{.UNIFORM_BUFFER},
+			{.HOST_VISIBLE, .HOST_COHERENT},
+			&b.frames[i].buf,
+			&b.frames[i].mem,
+		)
+		if !ok do return false
+		vk.MapMemory(r.device, b.frames[i].mem, 0, vk.DeviceSize(vk.WHOLE_SIZE), {}, &b.frames[i].mapped)
+
+		layout := b.desc_layout
+		alloc := vk.DescriptorSetAllocateInfo{
+			sType              = .DESCRIPTOR_SET_ALLOCATE_INFO,
+			descriptorPool     = b.desc_pool,
+			descriptorSetCount = 1,
+			pSetLayouts        = &layout,
+		}
+		if !vk_check(vk.AllocateDescriptorSets(r.device, &alloc, &b.frames[i].set), "background AllocateDescriptorSets") do return false
+
+		buf_info := vk.DescriptorBufferInfo{
+			buffer = b.frames[i].buf,
+			offset = 0,
+			range  = ubo_size,
+		}
+		write := vk.WriteDescriptorSet{
+			sType           = .WRITE_DESCRIPTOR_SET,
+			dstSet          = b.frames[i].set,
+			dstBinding      = 0,
+			descriptorCount = 1,
+			descriptorType  = .UNIFORM_BUFFER,
+			pBufferInfo     = &buf_info,
+		}
+		vk.UpdateDescriptorSets(r.device, 1, &write, 0, nil)
+	}
+	return true
+}
+
+@(private="file")
+background_create_pipeline :: proc(b: ^Background_Renderer, r: ^Renderer) -> bool {
 	vert_mod, ok1 := create_shader_module(r.device, BACKGROUND_VERT_SPV)
 	if !ok1 do return false
 	defer vk.DestroyShaderModule(r.device, vert_mod, nil)
@@ -80,6 +195,8 @@ background_init :: proc(b: ^Background_Renderer, r: ^Renderer) -> bool {
 	}
 	layout_info := vk.PipelineLayoutCreateInfo{
 		sType                  = .PIPELINE_LAYOUT_CREATE_INFO,
+		setLayoutCount         = 1,
+		pSetLayouts            = &b.desc_layout,
 		pushConstantRangeCount = 1,
 		pPushConstantRanges    = &pc_range,
 	}
@@ -106,17 +223,50 @@ background_init :: proc(b: ^Background_Renderer, r: ^Renderer) -> bool {
 background_shutdown :: proc(b: ^Background_Renderer, r: ^Renderer) {
 	if b.pipeline != 0 do vk.DestroyPipeline(r.device, b.pipeline, nil)
 	if b.pipeline_layout != 0 do vk.DestroyPipelineLayout(r.device, b.pipeline_layout, nil)
+	for i in 0 ..< MAX_FRAMES_IN_FLIGHT {
+		if b.frames[i].buf != 0 do vk.DestroyBuffer(r.device, b.frames[i].buf, nil)
+		if b.frames[i].mem != 0 do vk.FreeMemory(r.device, b.frames[i].mem, nil)
+	}
+	if b.desc_pool != 0 do vk.DestroyDescriptorPool(r.device, b.desc_pool, nil)
+	if b.desc_layout != 0 do vk.DestroyDescriptorSetLayout(r.device, b.desc_layout, nil)
+	delete(b.lights)
+}
+
+// Per-frame light list management. The game clears at the start of its frame
+// and pushes one entry per visible building/tile in world space.
+background_clear_lights :: proc(b: ^Background_Renderer) {
+	clear(&b.lights)
+}
+
+background_push_light :: proc(b: ^Background_Renderer, x, y: f32) {
+	if len(b.lights) >= MAX_FOG_LIGHTS do return
+	append(&b.lights, [4]f32{x, y, 0, 0})
 }
 
 background_record :: proc(b: ^Background_Renderer, r: ^Renderer, cb: vk.CommandBuffer, view_scale, view_offset: [2]f32) {
 	full := vk.Rect2D{extent = r.swapchain_extent}
 	vk.CmdSetScissor(cb, 0, 1, &full)
 	vk.CmdBindPipeline(cb, .GRAPHICS, b.pipeline)
+
+	frame := r.current_frame
+	count := len(b.lights)
+	if count > MAX_FOG_LIGHTS do count = MAX_FOG_LIGHTS
+	if count > 0 {
+		dst := ([^][4]f32)(b.frames[frame].mapped)
+		for i in 0 ..< count do dst[i] = b.lights[i]
+	}
+
+	set := b.frames[frame].set
+	vk.CmdBindDescriptorSets(cb, .GRAPHICS, b.pipeline_layout, 0, 1, &set, 0, nil)
+
 	pc := Background_PC{
-		screen      = {f32(r.swapchain_extent.width), f32(r.swapchain_extent.height)},
-		view_scale  = view_scale,
-		view_offset = view_offset,
-		time        = f32(glfw.GetTime()),
+		screen        = {f32(r.swapchain_extent.width), f32(r.swapchain_extent.height)},
+		view_scale    = view_scale,
+		view_offset   = view_offset,
+		time          = f32(glfw.GetTime()),
+		light_count   = i32(count),
+		light_radius  = b.light_radius,
+		light_falloff = b.light_falloff,
 	}
 	vk.CmdPushConstants(cb, b.pipeline_layout, {.FRAGMENT}, 0, size_of(Background_PC), &pc)
 	vk.CmdDraw(cb, 3, 1, 0, 0)

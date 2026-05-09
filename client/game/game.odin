@@ -219,6 +219,16 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		}
 	}
 
+	// Fog-of-war lighting: every tile contributes a world-space halo so the
+	// background's dark fade stays anchored to what the player has built,
+	// instead of the centre of the screen. Done before set_camera so it's
+	// independent of the current 2D affine.
+	p->fog_lights_clear()
+	for coord, _ in g.world.tiles {
+		c := hex_to_pixel(coord)
+		p->fog_lights_push(c.x, c.y)
+	}
+
 	// World pass
 	scale, offset := camera_view(&g.cam, sw, sh)
 	p->set_camera(scale, offset)

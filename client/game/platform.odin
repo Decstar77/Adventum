@@ -58,6 +58,12 @@ Platform :: struct {
 	push_scissor: proc(p: ^Platform, x, y, w, h: f32),
 	pop_scissor:  proc(p: ^Platform),
 
+	// Fog-of-war lighting points (world space). The host draws a soft halo
+	// around each one in the background pass, anchored to the world so it pans
+	// with the camera. The game pushes one per visible building each frame.
+	fog_lights_clear: proc(p: ^Platform),
+	fog_lights_push:  proc(p: ^Platform, x, y: f32),
+
 	// Window
 	toggle_fullscreen: proc(p: ^Platform),
 	request_quit:      proc(p: ^Platform),

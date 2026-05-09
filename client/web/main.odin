@@ -105,10 +105,17 @@ make_platform :: proc() -> game.Platform {
 		clear_camera        = plat_clear_camera,
 		push_scissor        = plat_push_scissor,
 		pop_scissor         = plat_pop_scissor,
+		fog_lights_clear    = plat_fog_lights_clear,
+		fog_lights_push     = plat_fog_lights_push,
 		toggle_fullscreen   = plat_toggle_fullscreen,
 		request_quit        = plat_request_quit,
 	}
 }
+
+@(private="file")
+plat_fog_lights_clear :: proc(p: ^game.Platform) {}
+@(private="file")
+plat_fog_lights_push  :: proc(p: ^game.Platform, x, y: f32) {}
 
 @(private="file")
 plat_is_key_down :: proc "contextless" (p: ^game.Platform, key: game.Key) -> bool {
