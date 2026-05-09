@@ -40,6 +40,52 @@ Game :: struct {
 PANEL_W :: f32(240)
 PANEL_H :: f32(220)
 
+Cost_Sign :: enum { Spend, Gain }
+
+// Button with a label followed by a signed cost and a food icon, e.g.
+// "Upgrade  -15 [food]" or "Sell  +7 [food]". The label, number, and icon
+// are centered together as one cluster so the spacing reads as a single tag.
+button_with_food_cost :: proc(ui: ^UI, p: ^Platform, label: string, amount: i32, sign: Cost_Sign, x, y, w, h: f32) -> bool {
+	hover := point_in_rect(p.mouse, x, y, w, h)
+	held  := hover && p.mouse_left_down
+
+	BASE  := [4]f32{0.18, 0.20, 0.26, 1.0}
+	HOVER := [4]f32{0.26, 0.30, 0.40, 1.0}
+	HELD  := [4]f32{0.10, 0.12, 0.16, 1.0}
+
+	bg := BASE
+	if held       do bg = HELD
+	else if hover do bg = HOVER
+
+	p->draw_rect(x, y, w, h, bg)
+	p->draw_line(x, y,     x + w, y,     1, {1, 1, 1, 0.15})
+	p->draw_line(x, y + h, x + w, y + h, 1, {0, 0, 0, 0.40})
+
+	prefix := sign == .Spend ? "-" : "+"
+	num_str := fmt.tprintf("%s%d", prefix, amount)
+
+	gap_label_num := f32(12)
+	gap_num_icon  := f32(4)
+	icon_s        := f32(16)
+
+	label_w := p->text_measure(label,   .Small)
+	num_w   := p->text_measure(num_str, .Small)
+	total_w := label_w + gap_label_num + num_w + gap_num_icon + icon_s
+
+	cx0 := x + (w - total_w) * 0.5
+	font_small := p->font_size_px(.Small)
+	ty := y + h * 0.5 + font_small * 0.3
+
+	tint := sign == .Spend ? [4]f32{1.0, 0.78, 0.78, 1} : [4]f32{0.85, 1.0, 0.80, 1}
+	p->draw_text(cx0,                                        ty, label,   {1, 1, 1, 1}, .Small)
+	p->draw_text(cx0 + label_w + gap_label_num,              ty, num_str, tint,         .Small)
+	icon_x := cx0 + label_w + gap_label_num + num_w + gap_num_icon
+	icon_y := y + (h - icon_s) * 0.5
+	draw_food_icon(p, icon_x, icon_y, icon_s)
+
+	return hover && p.mouse_left_pressed
+}
+
 TICK_HZ :: 10.0
 TICK_DT :: f32(1.0 / TICK_HZ)
 
@@ -407,28 +453,35 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 
 		can_sell := tile.kind != .Core
 		refund := i32(cost * 0.5)
-		sell_label := can_sell ? fmt.tprintf("Sell  (+%d food)", refund) : "Sell  (locked)"
 
 		// Wire/Core have no upgrade path — collapse the layout so Sell takes
 		// the bottom slot rather than leaving an empty button hovering.
 		if !tile_is_upgradeable(tile.kind) {
 			sell_y = upgrade_y
 		}
-		if ui_button_at(&g.ui, p, sell_label, btn_x, sell_y, btn_w, btn_h) && can_sell {
-			world_sell(&g.world, g.selected_tile)
-			g.has_selection = false
+
+		// Sell button: "Sell  +N <food icon>" (or "Sell  (locked)" for Core).
+		if can_sell {
+			if button_with_food_cost(&g.ui, p, "Sell", refund, .Gain, btn_x, sell_y, btn_w, btn_h) {
+				world_sell(&g.world, g.selected_tile)
+				g.has_selection = false
+			}
+		} else {
+			ui_button_at(&g.ui, p, "Sell  (locked)", btn_x, sell_y, btn_w, btn_h)
 		}
+
 		if tile_is_upgradeable(tile.kind) {
 			at_max := tile.tier >= tile_max_tier(tile.kind)
 			up_cost := tile_upgrade_cost(tile.kind, tile.tier)
 			can_up := !at_max && g.world.food >= up_cost
-			label: string
+			clicked: bool
 			switch {
-			case at_max:  label = fmt.tprintf("Upgrade  (max tier %d)", tile.tier)
-			case can_up:  label = fmt.tprintf("Upgrade -> Tier %d  (-%.0f food)", tile.tier + 1, up_cost)
-			case:         label = fmt.tprintf("Upgrade -> Tier %d  (need %.0f food)", tile.tier + 1, up_cost)
+			case at_max:
+				ui_button_at(&g.ui, p, "Upgrade  (max)", btn_x, upgrade_y, btn_w, btn_h)
+			case:
+				clicked = button_with_food_cost(&g.ui, p, "Upgrade", i32(up_cost), .Spend, btn_x, upgrade_y, btn_w, btn_h)
 			}
-			if ui_button_at(&g.ui, p, label, btn_x, upgrade_y, btn_w, btn_h) && can_up {
+			if clicked && can_up {
 				world_upgrade(&g.world, g.selected_tile)
 			}
 		}
