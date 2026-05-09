@@ -196,6 +196,10 @@ fx_emit_enemy_death :: proc(w: ^World, pos: [2]f32, kind: Enemy_Kind) {
 		core_color  = {1.0, 0.86, 0.58, 1}
 		chunk_color = {0.729, 0.459, 0.090, 1}
 		count = 18
+	case .Spitter:
+		core_color  = {0.78, 1.0, 0.92, 1}
+		chunk_color = {0.114, 0.620, 0.459, 1}
+		count = 12
 	}
 	// Central flash.
 	emit(w, Particle{

@@ -1,5 +1,8 @@
 package game
 
+// Hard grace period: nothing spawns (trickle or surge) before this many
+// seconds, so the player has time to lay out their opening base.
+WAVE_GRACE_PERIOD    :: f32(30)
 WAVE_FIRST_SURGE_AT  :: f32(90)
 WAVE_SURGE_GAP       :: f32(90)
 WAVE_SURGE_DURATION  :: f32(4)
@@ -50,10 +53,15 @@ trickle_interval :: proc(t: f32) -> f32 {
 }
 
 @(private="file")
-surge_composition :: proc(index: i32) -> (crawlers, brutes: i32) {
+surge_composition :: proc(index: i32) -> (crawlers, brutes, spitters: i32) {
 	crawlers = 8 + index * 2
 	if index >= 1 {
-		brutes = index * 2
+		brutes = 2 + index * 2
+	}
+	// Spitters debut on the second surge and ramp slowly — they harass at
+	// stand-off range and pair well with the contact-melee fodder.
+	if index >= 1 {
+		spitters = 2 + index
 	}
 	return
 }
@@ -62,7 +70,18 @@ waves_update :: proc(world: ^World, w: ^Wave_State, dt: f32) {
 	w.elapsed += dt
 	if w.banner_time > 0 do w.banner_time -= dt
 
-	// Continuous trickle (always running, ramps with elapsed time).
+	// Honor the grace period: no trickle and no surge before WAVE_GRACE_PERIOD.
+	// Surge timing already lives at WAVE_FIRST_SURGE_AT >> grace, so this only
+	// really gates the trickle in practice — but the early-return keeps the
+	// invariant in one place.
+	if w.elapsed < WAVE_GRACE_PERIOD {
+		// Drain the trickle accumulator so the moment grace ends we don't dump
+		// 30 seconds' worth of crawlers in one frame.
+		w.trickle_acc = 0
+		return
+	}
+
+	// Continuous trickle (always running once grace ends, ramps with elapsed time).
 	w.trickle_acc += dt
 	iv := trickle_interval(w.elapsed)
 	for w.trickle_acc >= iv {
@@ -72,11 +91,12 @@ waves_update :: proc(world: ^World, w: ^Wave_State, dt: f32) {
 
 	// Trigger a new surge.
 	if !w.surge_active && w.elapsed >= w.next_surge_at {
-		crawlers, brutes := surge_composition(w.surge_index)
+		crawlers, brutes, spitters := surge_composition(w.surge_index)
 		clear(&w.surge.queue)
 		// pop() removes the LAST element, so order the queue so crawlers spawn
 		// first (drama: small things first, brutes follow).
 		for _ in 0 ..< brutes   do append(&w.surge.queue, Enemy_Kind.Brute)
+		for _ in 0 ..< spitters do append(&w.surge.queue, Enemy_Kind.Spitter)
 		for _ in 0 ..< crawlers do append(&w.surge.queue, Enemy_Kind.Crawler)
 		w.surge.duration  = WAVE_SURGE_DURATION
 		w.surge.time_left = WAVE_SURGE_DURATION

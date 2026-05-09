@@ -41,6 +41,7 @@ scrap_for_kind :: proc(kind: Enemy_Kind) -> i32 {
 	switch kind {
 	case .Crawler: return 1
 	case .Brute:   return 4
+	case .Spitter: return 2
 	}
 	return 0
 }

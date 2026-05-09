@@ -17,7 +17,7 @@ Font_Size :: enum {
 Key :: enum {
 	Unknown,
 	W, A, S, D,
-	C, B, R,
+	C, B, R, V,
 	Num1, Num2, Num3, Num4, Num5, Num6,
 	Escape,
 	Enter,

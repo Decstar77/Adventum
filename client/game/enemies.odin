@@ -9,6 +9,7 @@ ENEMY_SPAWN_RADIUS :: f32(700)
 Enemy_Kind :: enum {
 	Crawler,
 	Brute,
+	Spitter,
 }
 
 Enemy :: struct {
@@ -30,14 +31,26 @@ enemy_stats :: proc(kind: Enemy_Kind) -> (hp, speed, dmg: f32) {
 	switch kind {
 	case .Crawler: return 20, 80, 10
 	case .Brute:   return 100, 35, 30
+	case .Spitter: return 30, 55, 14
 	}
 	return 0, 0, 0
+}
+
+// Distance the enemy stops short of a tile's hex boundary before attacking.
+// Contact-melee kinds return 0; ranged kinds stand off and chip from there.
+enemy_attack_range :: proc(kind: Enemy_Kind) -> f32 {
+	switch kind {
+	case .Crawler, .Brute: return 0
+	case .Spitter:         return 70
+	}
+	return 0
 }
 
 enemy_kind_name :: proc(kind: Enemy_Kind) -> string {
 	switch kind {
 	case .Crawler: return "Crawler"
 	case .Brute:   return "Brute"
+	case .Spitter: return "Spitter"
 	}
 	return "?"
 }
@@ -115,8 +128,8 @@ build_path_field :: proc(w: ^World, field: ^Path_Field, weights: Pathing_Weights
 
 enemy_field_for :: proc(w: ^World, kind: Enemy_Kind) -> ^Path_Field {
 	switch kind {
-	case .Crawler: return &w.field_crawler
-	case .Brute:   return &w.field_brute
+	case .Crawler, .Spitter: return &w.field_crawler
+	case .Brute:             return &w.field_brute
 	}
 	return &w.field_crawler
 }
@@ -170,7 +183,7 @@ enemies_update :: proc(w: ^World, dt: f32) {
 		// Stop at the tile boundary (hex edge along the approach direction)
 		// rather than the tile centre, plus a small body-radius buffer.
 		boundary := hex_boundary_distance(-dx, -dy)
-		stop_dist := boundary + ENEMY_BODY_RADIUS
+		stop_dist := boundary + ENEMY_BODY_RADIUS + enemy_attack_range(e.kind)
 
 		if d <= stop_dist {
 			tile, present := w.tiles[target]
@@ -237,6 +250,12 @@ enemies_render :: proc(w: ^World, p: ^Platform) {
 			p->draw_rect(e.pos.x - 9, e.pos.y - 9, 18, 18, {0.980, 0.933, 0.855, 1})
 			p->draw_rect(e.pos.x - 5, e.pos.y - 5, 10, 10, {0.729, 0.459, 0.090, 1})
 			draw_health_bar(p, e.pos.x, e.pos.y - 16, 24, e.hp, max_hp)
+		case .Spitter:
+			// Pale shell with a teal core — visually distinct from the warm
+			// red Crawler so the short-range threat reads at a glance.
+			p->draw_circle(e.pos.x, e.pos.y, 9, {0.882, 0.961, 0.933, 1})
+			p->draw_circle(e.pos.x, e.pos.y, 5, {0.114, 0.620, 0.459, 1})
+			draw_health_bar(p, e.pos.x, e.pos.y - 16, 22, e.hp, max_hp)
 		}
 	}
 }

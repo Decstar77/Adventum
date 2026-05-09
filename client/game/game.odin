@@ -196,6 +196,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	if !g.world.game_over {
 		if p->is_key_just_pressed(.C) do enemy_spawn(&g.world, .Crawler)
 		if p->is_key_just_pressed(.B) do enemy_spawn(&g.world, .Brute)
+		if p->is_key_just_pressed(.V) do enemy_spawn(&g.world, .Spitter)
 	}
 
 	if g.world.game_over && p->is_key_just_pressed(.R) {
