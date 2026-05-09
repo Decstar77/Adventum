@@ -365,7 +365,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	// Selection panel.
 	if g.has_selection {
 		tile := g.world.tiles[g.selected_tile]
-		max_hp := tile_max_hp(tile.kind)
+		max_hp := tile_max_hp(tile.kind, tile.tier)
 		cost := tile_cost(tile.kind)
 
 		p->draw_rect(panel_x, panel_y, PANEL_W, PANEL_H, {0.10, 0.11, 0.14, 0.92})
@@ -375,6 +375,13 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		title := tile_kind_name(tile.kind)
 		tw_title := p->text_measure(title, .Large)
 		p->draw_text(panel_x + (PANEL_W - tw_title) * 0.5, panel_y + 12 + font_large, title, {0.95, 0.95, 0.98, 1}, .Large)
+
+		// Tier subtitle (e.g. "Tier 2 / 3"). Hidden for non-upgradeable kinds.
+		if tile_is_upgradeable(tile.kind) {
+			tier_str := fmt.tprintf("Tier %d / %d", tile.tier, tile_max_tier(tile.kind))
+			tw_tier := p->text_measure(tier_str, .Small)
+			p->draw_text(panel_x + (PANEL_W - tw_tier) * 0.5, panel_y + 12 + font_large + font_small + 4, tier_str, {0.78, 0.82, 0.92, 1}, .Small)
+		}
 
 		hp_y := panel_y + 12 + font_large + 24
 		hp_str := fmt.tprintf("HP  %.0f / %.0f", tile.hp, max_hp)
@@ -399,12 +406,29 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		can_sell := tile.kind != .Core
 		refund := i32(cost * 0.5)
 		sell_label := can_sell ? fmt.tprintf("Sell  (+%d food)", refund) : "Sell  (locked)"
+
+		// Wire/Core have no upgrade path — collapse the layout so Sell takes
+		// the bottom slot rather than leaving an empty button hovering.
+		if !tile_is_upgradeable(tile.kind) {
+			sell_y = upgrade_y
+		}
 		if ui_button_at(&g.ui, p, sell_label, btn_x, sell_y, btn_w, btn_h) && can_sell {
 			world_sell(&g.world, g.selected_tile)
 			g.has_selection = false
 		}
-		if ui_button_at(&g.ui, p, "Upgrade", btn_x, upgrade_y, btn_w, btn_h) {
-			// TODO: implement upgrades.
+		if tile_is_upgradeable(tile.kind) {
+			at_max := tile.tier >= tile_max_tier(tile.kind)
+			up_cost := tile_upgrade_cost(tile.kind, tile.tier)
+			can_up := !at_max && g.world.food >= up_cost
+			label: string
+			switch {
+			case at_max:  label = fmt.tprintf("Upgrade  (max tier %d)", tile.tier)
+			case can_up:  label = fmt.tprintf("Upgrade -> Tier %d  (-%.0f food)", tile.tier + 1, up_cost)
+			case:         label = fmt.tprintf("Upgrade -> Tier %d  (need %.0f food)", tile.tier + 1, up_cost)
+			}
+			if ui_button_at(&g.ui, p, label, btn_x, upgrade_y, btn_w, btn_h) && can_up {
+				world_upgrade(&g.world, g.selected_tile)
+			}
 		}
 	}
 

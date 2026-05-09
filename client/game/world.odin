@@ -21,10 +21,72 @@ START_FOOD  :: f32(30)
 
 Tile :: struct {
 	kind:      Tile_Kind,
+	tier:      i32, // 1..tile_max_tier(kind); always 1 on placement.
 	hp:        f32,
 	energized: bool,
 	cooldown:  f32,
 	aim_angle: f32, // turret barrel angle in radians (atan2 convention)
+}
+
+// Wire/Core are not upgradeable. Everything else maxes at tier 3.
+tile_max_tier :: proc(kind: Tile_Kind) -> i32 {
+	switch kind {
+	case .Wire, .Core: return 1
+	case .Farm, .Generator, .Turret, .Wall, .Relay: return 3
+	}
+	return 1
+}
+
+tile_is_upgradeable :: proc(kind: Tile_Kind) -> bool {
+	return tile_max_tier(kind) > 1
+}
+
+// Upgrade cost in food: scales with the destination tier.
+tile_upgrade_cost :: proc(kind: Tile_Kind, current_tier: i32) -> f32 {
+	if current_tier >= tile_max_tier(kind) do return 0
+	base := tile_cost(kind)
+	// 1->2 costs base, 2->3 costs base * 2.
+	return base * f32(current_tier)
+}
+
+// --- Tiered stats -----------------------------------------------------------
+
+// Generator power radius in hexes.
+generator_radius :: proc(tier: i32) -> i32 {
+	switch tier {
+	case 2: return 2
+	case 3: return 3
+	}
+	return 1
+}
+
+// Per-Farm food production per second.
+farm_food_rate :: proc(tier: i32) -> f32 {
+	switch tier {
+	case 2: return 1.6
+	case 3: return 2.4
+	}
+	return 1.0
+}
+
+// Relay build radius in hexes (overrides BUILD_RANGE for relays).
+relay_build_radius :: proc(tier: i32) -> i32 {
+	switch tier {
+	case 2: return 3
+	case 3: return 4
+	}
+	return BUILD_RANGE
+}
+
+turret_damage :: proc(tier: i32) -> f32 {
+	switch tier {
+	case 2, 3: return TURRET_DAMAGE * 1.6
+	}
+	return TURRET_DAMAGE
+}
+
+turret_has_back_gun :: proc(tier: i32) -> bool {
+	return tier >= 3
 }
 
 World :: struct {
@@ -45,7 +107,7 @@ World :: struct {
 
 world_init :: proc(w: ^World) {
 	w.core = {0, 0}
-	w.tiles[w.core] = Tile{kind = .Core, hp = 200, energized = true}
+	w.tiles[w.core] = Tile{kind = .Core, tier = 1, hp = 200, energized = true}
 	w.food = START_FOOD
 	w.path_dirty = true
 	waves_init(&w.waves)
@@ -82,7 +144,7 @@ world_in_build_range :: proc(w: ^World, c: Hex_Coord) -> bool {
 	if hex_distance(c, w.core) <= BUILD_RANGE do return true
 	for coord, tile in w.tiles {
 		if tile.kind != .Relay do continue
-		if hex_distance(c, coord) <= BUILD_RANGE do return true
+		if hex_distance(c, coord) <= relay_build_radius(tile.tier) do return true
 	}
 	return false
 }
@@ -97,11 +159,38 @@ world_can_place :: proc(w: ^World, c: Hex_Coord, kind: Tile_Kind) -> bool {
 world_place :: proc(w: ^World, c: Hex_Coord, kind: Tile_Kind) -> bool {
 	if !world_can_place(w, c, kind) do return false
 	w.food -= tile_cost(kind)
-	tile := Tile{kind = kind, hp = tile_max_hp(kind)}
+	tile := Tile{kind = kind, tier = 1, hp = tile_max_hp(kind, 1)}
 	if kind == .Turret {
 		tile.aim_angle = -math.PI * 0.5 // start pointing up
 	}
 	w.tiles[c] = tile
+	w.path_dirty = true
+	return true
+}
+
+// Bump a tile up one tier. Costs food, scales hp by the new max-hp ratio so
+// upgrades feel like a buff rather than a free heal.
+world_can_upgrade :: proc(w: ^World, c: Hex_Coord) -> bool {
+	t, ok := w.tiles[c]
+	if !ok do return false
+	if !tile_is_upgradeable(t.kind) do return false
+	if t.tier >= tile_max_tier(t.kind) do return false
+	if w.food < tile_upgrade_cost(t.kind, t.tier) do return false
+	return true
+}
+
+world_upgrade :: proc(w: ^World, c: Hex_Coord) -> bool {
+	if !world_can_upgrade(w, c) do return false
+	t := w.tiles[c]
+	cost := tile_upgrade_cost(t.kind, t.tier)
+	old_max := tile_max_hp(t.kind, t.tier)
+	t.tier += 1
+	new_max := tile_max_hp(t.kind, t.tier)
+	if old_max > 0 do t.hp *= new_max / old_max
+	if t.hp > new_max do t.hp = new_max
+	w.tiles[c] = t
+	w.food -= cost
+	// Relay range and generator coverage can change pathing/energization.
 	w.path_dirty = true
 	return true
 }
@@ -125,17 +214,42 @@ world_sell :: proc(w: ^World, c: Hex_Coord) -> bool {
 	return true
 }
 
-tile_max_hp :: proc(kind: Tile_Kind) -> f32 {
+tile_max_hp :: proc(kind: Tile_Kind, tier: i32 = 1) -> f32 {
+	base: f32
 	switch kind {
-	case .Core:      return 200
-	case .Wall:      return 200
-	case .Turret:    return 80
-	case .Generator: return 60
-	case .Wire:      return 30
-	case .Relay:     return 50
-	case .Farm:      return 50
+	case .Core:      base = 200
+	case .Wall:      base = 200
+	case .Turret:    base = 80
+	case .Generator: base = 60
+	case .Wire:      base = 30
+	case .Relay:     base = 50
+	case .Farm:      base = 50
+	case:            base = 50
 	}
-	return 50
+	// Per-kind tier scaling. Walls scale aggressively; Farm/Generator get a
+	// small bonus; everything else inherits a tiny default bump so upgrades
+	// always feel meaningful.
+	mult := f32(1)
+	switch kind {
+	case .Wall:
+		switch tier {
+		case 2: mult = 1.75
+		case 3: mult = 2.50
+		}
+	case .Farm, .Generator:
+		switch tier {
+		case 2: mult = 1.15
+		case 3: mult = 1.30
+		}
+	case .Turret, .Relay:
+		switch tier {
+		case 2: mult = 1.20
+		case 3: mult = 1.40
+		}
+	case .Wire, .Core:
+		// Not upgradeable.
+	}
+	return base * mult
 }
 
 world_count_kind :: proc(w: ^World, kind: Tile_Kind) -> int {
@@ -184,26 +298,44 @@ world_recompute_energy :: proc(w: ^World) {
 		}
 	}
 
-	// Pass 3: any consumer adjacent to a powered conductor (Generator or
-	// energized Wire) is energized.
+	// Pass 3: any consumer adjacent to an energized wire is energized, and
+	// any consumer within `generator_radius(tier)` hexes of a Generator is
+	// energized directly. Tiered generators project a wider field.
 	for coord, tile in w.tiles {
-		is_conductor := tile.kind == .Generator || (tile.kind == .Wire && tile.energized)
-		if !is_conductor do continue
-		for d in HEX_NEIGHBOR_OFFSETS {
-			n := Hex_Coord{coord.x + d.x, coord.y + d.y}
-			nt, ok := w.tiles[n]
-			if !ok do continue
-			if !tile_consumes_energy(nt.kind) do continue
-			if nt.energized do continue
-			nt.energized = true
-			w.tiles[n] = nt
+		if tile.kind == .Wire && tile.energized {
+			for d in HEX_NEIGHBOR_OFFSETS {
+				n := Hex_Coord{coord.x + d.x, coord.y + d.y}
+				nt, ok := w.tiles[n]
+				if !ok do continue
+				if !tile_consumes_energy(nt.kind) do continue
+				if nt.energized do continue
+				nt.energized = true
+				w.tiles[n] = nt
+			}
+		}
+	}
+	for coord, tile in w.tiles {
+		if tile.kind != .Generator do continue
+		radius := generator_radius(tile.tier)
+		for other_coord, other in w.tiles {
+			if !tile_consumes_energy(other.kind) do continue
+			if other.energized do continue
+			if hex_distance(coord, other_coord) > radius do continue
+			ot := other
+			ot.energized = true
+			w.tiles[other_coord] = ot
 		}
 	}
 }
 
 world_tick :: proc(w: ^World, dt: f32) {
-	farms := f32(world_count_kind(w, .Farm))
-	w.food += farms * dt
+	// Sum each farm's tiered output rather than count*1, so tier-2/3 farms
+	// produce more food per second.
+	food_rate := f32(0)
+	for _, tile in w.tiles {
+		if tile.kind == .Farm do food_rate += farm_food_rate(tile.tier)
+	}
+	w.food += food_rate * dt
 	world_recompute_energy(w)
 	if w.path_dirty {
 		build_path_field(w, &w.field_crawler, CRAWLER_WEIGHTS)
@@ -245,7 +377,7 @@ tile_color :: proc(kind: Tile_Kind) -> (fill, stroke: [4]f32) {
 	return {1, 1, 1, 1}, {0, 0, 0, 1}
 }
 
-draw_tile_icon :: proc(p: ^Platform, cx, cy: f32, kind: Tile_Kind, alpha: f32, aim_angle: f32 = -math.PI * 0.5) {
+draw_tile_icon :: proc(p: ^Platform, cx, cy: f32, kind: Tile_Kind, alpha: f32, aim_angle: f32 = -math.PI * 0.5, tier: i32 = 1) {
 	_, stroke := tile_color(kind)
 	stroke.a *= alpha
 
@@ -254,16 +386,51 @@ draw_tile_icon :: proc(p: ^Platform, cx, cy: f32, kind: Tile_Kind, alpha: f32, a
 		p->draw_circle(cx, cy, 10, stroke)
 
 	case .Farm:
-		p->draw_rect(cx - 11, cy - 11, 9, 9, stroke)
-		p->draw_rect(cx +  2, cy - 11, 9, 9, stroke)
+		// Two rows of NxN blocks; column count grows with tier.
+		// Tier 1 = 2 cols (4 blocks), 2 = 3 cols (6), 3 = 4 cols (8).
 		light := [4]f32{0.388, 0.600, 0.133, alpha}
-		p->draw_rect(cx - 11, cy +  2, 9, 9, light)
-		p->draw_rect(cx +  2, cy +  2, 9, 9, light)
+		cols: i32
+		switch tier {
+		case 2: cols = 3
+		case 3: cols = 4
+		case:   cols = 2
+		}
+		// Total icon footprint stays ~26px wide regardless of tier; cells
+		// shrink to fit. Top row stroke, bottom row light.
+		footprint := f32(26)
+		gap       := f32(2)
+		cell      := (footprint - gap * f32(cols - 1)) / f32(cols)
+		x0        := cx - footprint * 0.5
+		y_top     := cy - cell - 1
+		y_bot     := cy + 1
+		for i in 0 ..< cols {
+			x := x0 + f32(i) * (cell + gap)
+			p->draw_rect(x, y_top, cell, cell, stroke)
+			p->draw_rect(x, y_bot, cell, cell, light)
+		}
 
 	case .Generator:
+		// Lightning Z. Tier 2/3 add side-by-side copies.
 		amber := [4]f32{0.729, 0.459, 0.090, alpha}
-		p->draw_line(cx - 6, cy - 12, cx + 6, cy +  0, 3, amber)
-		p->draw_line(cx + 6, cy +  0, cx - 4, cy + 12, 3, amber)
+		count: i32 = 1
+		switch tier {
+		case 2: count = 2
+		case 3: count = 3
+		}
+		// Pack `count` Z's into a 28px-wide footprint. Each Z's natural
+		// width was 12; we scale uniformly to fit.
+		footprint := f32(28)
+		gap       := f32(2)
+		cell_w    := (footprint - gap * f32(count - 1)) / f32(count)
+		s         := cell_w / 12 // scale relative to the original 12px-wide Z
+		x0        := cx - footprint * 0.5 + cell_w * 0.5
+		thick     := f32(3)
+		if s < 1 do thick = math.max(2, 3 * s)
+		for i in 0 ..< count {
+			zx := x0 + f32(i) * (cell_w + gap)
+			p->draw_line(zx - 6 * s, cy - 12 * s, zx + 6 * s, cy +  0 * s, thick, amber)
+			p->draw_line(zx + 6 * s, cy +  0 * s, zx - 4 * s, cy + 12 * s, thick, amber)
+		}
 
 	case .Wire:
 		spark := [4]f32{0.729, 0.459, 0.090, alpha}
@@ -278,27 +445,83 @@ draw_tile_icon :: proc(p: ^Platform, cx, cy: f32, kind: Tile_Kind, alpha: f32, a
 		bx := cx + math.cos(aim_angle) * barrel_len
 		by := cy + math.sin(aim_angle) * barrel_len
 		p->draw_line(cx, cy, bx, by, 4, stroke)
+		// (Tier-3 back gun is rendered separately by the world pass since
+		// draw_tile_icon doesn't know the tile's tier.)
 
 	case .Wall:
+		// Brick stack: a wider top course and a narrower bottom course.
+		// Tier 1 = 3 bricks (2 top + 1 bottom — original look).
+		// Tier 2 = 5 bricks (3 top + 2 bottom).
+		// Tier 3 = 7 bricks (4 top + 3 bottom).
 		mid := [4]f32{0.533, 0.529, 0.502, alpha}
-		p->draw_rect(cx - 13, cy - 8, 9, 9, mid)
-		p->draw_rect(cx +  4, cy - 8, 9, 9, mid)
-		p->draw_rect(cx -  4, cy + 1, 9, 9, stroke)
+		top_count, bot_count: i32
+		switch tier {
+		case 2: top_count, bot_count = 3, 2
+		case 3: top_count, bot_count = 4, 3
+		case:   top_count, bot_count = 2, 1
+		}
+		footprint := f32(28)
+		gap       := f32(2)
+		brick_top := (footprint - gap * f32(top_count - 1)) / f32(top_count)
+		brick_bot := (footprint - gap * f32(bot_count - 1)) / f32(bot_count)
+		brick_h   := f32(9)
+		// Cap brick height as bricks shrink so they still read as "blocks".
+		if brick_top < brick_h do brick_h = brick_top
+		x0_top := cx - footprint * 0.5
+		x0_bot := cx - (brick_bot * f32(bot_count) + gap * f32(bot_count - 1)) * 0.5
+		y_top  := cy - brick_h - 1
+		y_bot  := cy + 1
+		for i in 0 ..< top_count {
+			p->draw_rect(x0_top + f32(i) * (brick_top + gap), y_top, brick_top, brick_h, mid)
+		}
+		for i in 0 ..< bot_count {
+			p->draw_rect(x0_bot + f32(i) * (brick_bot + gap), y_bot, brick_bot, brick_h, stroke)
+		}
 
 	case .Relay:
+		// Concentric ring; tiers add additional rings.
+		// Tier 1 = 1 ring (centered).
+		// Tier 2 = 2 rings side by side.
+		// Tier 3 = 3 rings arranged as a triangle (one top, two bottom).
 		ring_outer := [4]f32{0.365, 0.792, 0.647, alpha}
 		ring_inner := [4]f32{0.114, 0.620, 0.459, alpha}
 		fill, _ := tile_color(kind)
-		p->draw_circle(cx, cy, 10, ring_outer)
-		p->draw_circle(cx, cy,  7, fill)
-		p->draw_circle(cx, cy,  4, ring_inner)
+		draw_ring :: proc(p: ^Platform, x, y, r_outer: f32, c_outer, c_fill, c_inner: [4]f32) {
+			p->draw_circle(x, y, r_outer,        c_outer)
+			p->draw_circle(x, y, r_outer * 0.7,  c_fill)
+			p->draw_circle(x, y, r_outer * 0.4,  c_inner)
+		}
+		switch tier {
+		case 2:
+			r := f32(7)
+			draw_ring(p, cx - 8, cy, r, ring_outer, fill, ring_inner)
+			draw_ring(p, cx + 8, cy, r, ring_outer, fill, ring_inner)
+		case 3:
+			r := f32(6)
+			draw_ring(p, cx,     cy - 6, r, ring_outer, fill, ring_inner)
+			draw_ring(p, cx - 7, cy + 5, r, ring_outer, fill, ring_inner)
+			draw_ring(p, cx + 7, cy + 5, r, ring_outer, fill, ring_inner)
+		case:
+			draw_ring(p, cx, cy, 10, ring_outer, fill, ring_inner)
+		}
 	}
 }
 
 @(private="file")
 draw_tile_marker :: proc(p: ^Platform, c: Hex_Coord, tile: Tile, alpha: f32) {
 	center := hex_to_pixel(c)
-	draw_tile_icon(p, center.x, center.y, tile.kind, alpha, tile.aim_angle)
+	draw_tile_icon(p, center.x, center.y, tile.kind, alpha, tile.aim_angle, tile.tier)
+
+	// Tier-3 turret: back gun mirrored across the body. Drawn here (not in
+	// draw_tile_icon) so the picker bar's iconography stays unchanged.
+	if tile.kind == .Turret && turret_has_back_gun(tile.tier) {
+		_, stroke := tile_color(.Turret)
+		stroke.a *= alpha
+		barrel_len := f32(15)
+		bx := center.x - math.cos(tile.aim_angle) * barrel_len
+		by := center.y - math.sin(tile.aim_angle) * barrel_len
+		p->draw_line(center.x, center.y, bx, by, 4, stroke)
+	}
 }
 
 // Small HUD icons drawn within an `s` × `s` box anchored at top-left (x, y).
@@ -350,7 +573,7 @@ world_render :: proc(w: ^World, p: ^Platform) {
 		draw_hex_outline(p, coord, 2, stroke)
 		draw_tile_marker(p, coord, tile, alpha)
 
-		max_hp := tile_max_hp(tile.kind)
+		max_hp := tile_max_hp(tile.kind, tile.tier)
 		center := hex_to_pixel(coord)
 		draw_health_bar(p, center.x, center.y - HEX_APOTHEM + 6, 30, tile.hp, max_hp)
 	}
@@ -359,11 +582,11 @@ world_render :: proc(w: ^World, p: ^Platform) {
 @(private="file")
 render_buildable_area :: proc(w: ^World, p: ^Platform) {
 	blue := [4]f32{0.36, 0.62, 0.95, 0.25}
-	visit :: proc(w: ^World, p: ^Platform, c: Hex_Coord, color: [4]f32, seen: ^map[Hex_Coord]bool) {
-		for q in i32(-BUILD_RANGE) ..= i32(BUILD_RANGE) {
-			for r in i32(-BUILD_RANGE) ..= i32(BUILD_RANGE) {
+	visit :: proc(w: ^World, p: ^Platform, c: Hex_Coord, radius: i32, color: [4]f32, seen: ^map[Hex_Coord]bool) {
+		for q in -radius ..= radius {
+			for r in -radius ..= radius {
 				n := Hex_Coord{c.x + q, c.y + r}
-				if hex_distance(n, c) > BUILD_RANGE do continue
+				if hex_distance(n, c) > radius do continue
 				if n in seen^ do continue
 				if n in w.tiles do continue
 				seen^[n] = true
@@ -374,10 +597,10 @@ render_buildable_area :: proc(w: ^World, p: ^Platform) {
 
 	seen: map[Hex_Coord]bool
 	defer delete(seen)
-	visit(w, p, w.core, blue, &seen)
+	visit(w, p, w.core, BUILD_RANGE, blue, &seen)
 	for coord, tile in w.tiles {
 		if tile.kind == .Relay {
-			visit(w, p, coord, blue, &seen)
+			visit(w, p, coord, relay_build_radius(tile.tier), blue, &seen)
 		}
 	}
 }

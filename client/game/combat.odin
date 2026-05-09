@@ -87,19 +87,27 @@ turrets_fire :: proc(w: ^World, dt: f32) {
 		if t.energized && t.cooldown <= 0 && has_target {
 			// Only fire once roughly aimed at the target.
 			if abs(shortest_angle_diff(t.aim_angle, target_angle)) <= TURRET_AIM_TOLERANCE {
-				dx := math.cos(t.aim_angle)
-				dy := math.sin(t.aim_angle)
-				muzzle := [2]f32{
-					origin.x + dx * TURRET_MUZZLE_OFFSET,
-					origin.y + dy * TURRET_MUZZLE_OFFSET,
+				dmg := turret_damage(t.tier)
+				fire_bullet :: proc(w: ^World, origin: [2]f32, angle, dmg: f32) {
+					dx := math.cos(angle)
+					dy := math.sin(angle)
+					muzzle := [2]f32{
+						origin.x + dx * TURRET_MUZZLE_OFFSET,
+						origin.y + dy * TURRET_MUZZLE_OFFSET,
+					}
+					append(&w.projectiles, Projectile{
+						pos  = muzzle,
+						vel  = {dx * PROJECTILE_SPEED, dy * PROJECTILE_SPEED},
+						dmg  = dmg,
+						life = PROJECTILE_LIFE,
+					})
+					fx_emit_muzzle(w, muzzle, angle)
 				}
-				append(&w.projectiles, Projectile{
-					pos  = muzzle,
-					vel  = {dx * PROJECTILE_SPEED, dy * PROJECTILE_SPEED},
-					dmg  = TURRET_DAMAGE,
-					life = PROJECTILE_LIFE,
-				})
-				fx_emit_muzzle(w, muzzle, t.aim_angle)
+				fire_bullet(w, origin, t.aim_angle, dmg)
+				// Tier-3 back gun: simultaneous shot in the opposite direction.
+				if turret_has_back_gun(t.tier) {
+					fire_bullet(w, origin, t.aim_angle + math.PI, dmg)
+				}
 				t.cooldown = TURRET_FIRE_INTERVAL
 			}
 		}
