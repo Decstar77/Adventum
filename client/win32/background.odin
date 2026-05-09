@@ -14,8 +14,8 @@ MAX_FOG_LIGHTS :: 256
 // Default world-space radii. The lit disk reaches out to FOG_LIGHT_RADIUS at
 // full strength and softly falls off over an additional FOG_LIGHT_FALLOFF.
 // Tuned against the hex grid (HEX_SIZE = 28 ⇒ ~48 world units between centres).
-FOG_LIGHT_RADIUS  :: f32(120)
-FOG_LIGHT_FALLOFF :: f32(180)
+FOG_LIGHT_RADIUS  :: f32(220)
+FOG_LIGHT_FALLOFF :: f32(480)
 
 Background_PC :: struct #packed {
 	screen:        [2]f32,
