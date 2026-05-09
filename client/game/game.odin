@@ -259,6 +259,8 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 			}
 		}
 		if g.has_selection {
+			// Influence halo first so the bright selection outline draws on top.
+			world_render_selection_influence(&g.world, p, g.selected_tile)
 			draw_hex_outline(p, g.selected_tile, 3, {1, 1, 1, 1})
 		}
 	}

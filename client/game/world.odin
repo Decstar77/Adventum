@@ -596,6 +596,39 @@ render_buildable_area :: proc(w: ^World, p: ^Platform) {
 	}
 }
 
+// Halo the hexes a Generator powers or a Relay extends build range over,
+// so the player can see at a glance what a selected support tile actually
+// covers. Renders nothing for kinds that have no area of influence.
+world_render_selection_influence :: proc(w: ^World, p: ^Platform, c: Hex_Coord) {
+	tile, ok := w.tiles[c]
+	if !ok do return
+
+	radius: i32
+	color:  [4]f32
+	switch tile.kind {
+	case .Generator:
+		radius = generator_radius(tile.tier)
+		// Amber, matching the generator stroke palette.
+		color = {0.98, 0.70, 0.25, 0.55}
+	case .Relay:
+		radius = relay_build_radius(tile.tier)
+		// Teal, matching the relay stroke palette.
+		color = {0.25, 0.85, 0.70, 0.55}
+	case .Core, .Farm, .Wire, .Turret, .Wall:
+		return
+	}
+	if radius <= 0 do return
+
+	for q in -radius ..= radius {
+		for r in -radius ..= radius {
+			n := Hex_Coord{c.x + q, c.y + r}
+			if hex_distance(n, c) > radius do continue
+			if n == c do continue
+			draw_hex_outline(p, n, 1.5, color)
+		}
+	}
+}
+
 world_render_hover :: proc(w: ^World, p: ^Platform, hover: Hex_Coord, center: [2]f32, placing: bool, selected: Tile_Kind) {
 	if !placing {
 		return
