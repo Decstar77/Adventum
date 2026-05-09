@@ -386,8 +386,9 @@ draw_tile_icon :: proc(p: ^Platform, cx, cy: f32, kind: Tile_Kind, alpha: f32, a
 		p->draw_circle(cx, cy, 10, stroke)
 
 	case .Farm:
-		// Two rows of NxN blocks; column count grows with tier.
-		// Tier 1 = 2 cols (4 blocks), 2 = 3 cols (6), 3 = 4 cols (8).
+		// Two rows of 9px blocks at the original size; column count grows
+		// with tier. Cell pitch matches the original layout (9px block,
+		// 4px gap), so the row just gets wider.
 		light := [4]f32{0.388, 0.600, 0.133, alpha}
 		cols: i32
 		switch tier {
@@ -395,41 +396,35 @@ draw_tile_icon :: proc(p: ^Platform, cx, cy: f32, kind: Tile_Kind, alpha: f32, a
 		case 3: cols = 4
 		case:   cols = 2
 		}
-		// Total icon footprint stays ~26px wide regardless of tier; cells
-		// shrink to fit. Top row stroke, bottom row light.
-		footprint := f32(26)
-		gap       := f32(2)
-		cell      := (footprint - gap * f32(cols - 1)) / f32(cols)
-		x0        := cx - footprint * 0.5
-		y_top     := cy - cell - 1
-		y_bot     := cy + 1
+		cell  := f32(9)
+		gap   := f32(4)
+		pitch := cell + gap
+		total := cell * f32(cols) + gap * f32(cols - 1)
+		x0    := cx - total * 0.5
+		y_top := cy - 11
+		y_bot := cy + 2
 		for i in 0 ..< cols {
-			x := x0 + f32(i) * (cell + gap)
+			x := x0 + f32(i) * pitch
 			p->draw_rect(x, y_top, cell, cell, stroke)
 			p->draw_rect(x, y_bot, cell, cell, light)
 		}
 
 	case .Generator:
-		// Lightning Z. Tier 2/3 add side-by-side copies.
+		// Lightning Z at its original size; tier 2/3 add translated copies.
 		amber := [4]f32{0.729, 0.459, 0.090, alpha}
 		count: i32 = 1
 		switch tier {
 		case 2: count = 2
 		case 3: count = 3
 		}
-		// Pack `count` Z's into a 28px-wide footprint. Each Z's natural
-		// width was 12; we scale uniformly to fit.
-		footprint := f32(28)
-		gap       := f32(2)
-		cell_w    := (footprint - gap * f32(count - 1)) / f32(count)
-		s         := cell_w / 12 // scale relative to the original 12px-wide Z
-		x0        := cx - footprint * 0.5 + cell_w * 0.5
-		thick     := f32(3)
-		if s < 1 do thick = math.max(2, 3 * s)
+		// Each Z spans -6..+6 horizontally; step centers by ~16 so adjacent
+		// glyphs sit shoulder to shoulder without overlapping.
+		step := f32(16)
+		x0   := cx - step * f32(count - 1) * 0.5
 		for i in 0 ..< count {
-			zx := x0 + f32(i) * (cell_w + gap)
-			p->draw_line(zx - 6 * s, cy - 12 * s, zx + 6 * s, cy +  0 * s, thick, amber)
-			p->draw_line(zx + 6 * s, cy +  0 * s, zx - 4 * s, cy + 12 * s, thick, amber)
+			zx := x0 + f32(i) * step
+			p->draw_line(zx - 6, cy - 12, zx + 6, cy +  0, 3, amber)
+			p->draw_line(zx + 6, cy +  0, zx - 4, cy + 12, 3, amber)
 		}
 
 	case .Wire:
@@ -449,7 +444,7 @@ draw_tile_icon :: proc(p: ^Platform, cx, cy: f32, kind: Tile_Kind, alpha: f32, a
 		// draw_tile_icon doesn't know the tile's tier.)
 
 	case .Wall:
-		// Brick stack: a wider top course and a narrower bottom course.
+		// Brick stack at the original brick size (9×9 with 4px gaps).
 		// Tier 1 = 3 bricks (2 top + 1 bottom — original look).
 		// Tier 2 = 5 bricks (3 top + 2 bottom).
 		// Tier 3 = 7 bricks (4 top + 3 bottom).
@@ -460,49 +455,45 @@ draw_tile_icon :: proc(p: ^Platform, cx, cy: f32, kind: Tile_Kind, alpha: f32, a
 		case 3: top_count, bot_count = 4, 3
 		case:   top_count, bot_count = 2, 1
 		}
-		footprint := f32(28)
-		gap       := f32(2)
-		brick_top := (footprint - gap * f32(top_count - 1)) / f32(top_count)
-		brick_bot := (footprint - gap * f32(bot_count - 1)) / f32(bot_count)
-		brick_h   := f32(9)
-		// Cap brick height as bricks shrink so they still read as "blocks".
-		if brick_top < brick_h do brick_h = brick_top
-		x0_top := cx - footprint * 0.5
-		x0_bot := cx - (brick_bot * f32(bot_count) + gap * f32(bot_count - 1)) * 0.5
-		y_top  := cy - brick_h - 1
+		cell  := f32(9)
+		gap   := f32(4)
+		pitch := cell + gap
+		total_top := cell * f32(top_count) + gap * f32(top_count - 1)
+		total_bot := cell * f32(bot_count) + gap * f32(bot_count - 1)
+		x0_top := cx - total_top * 0.5
+		x0_bot := cx - total_bot * 0.5
+		y_top  := cy - 8
 		y_bot  := cy + 1
 		for i in 0 ..< top_count {
-			p->draw_rect(x0_top + f32(i) * (brick_top + gap), y_top, brick_top, brick_h, mid)
+			p->draw_rect(x0_top + f32(i) * pitch, y_top, cell, cell, mid)
 		}
 		for i in 0 ..< bot_count {
-			p->draw_rect(x0_bot + f32(i) * (brick_bot + gap), y_bot, brick_bot, brick_h, stroke)
+			p->draw_rect(x0_bot + f32(i) * pitch, y_bot, cell, cell, stroke)
 		}
 
 	case .Relay:
-		// Concentric ring; tiers add additional rings.
-		// Tier 1 = 1 ring (centered).
+		// Concentric ring at full size (10/7/4); tiers add translated copies.
+		// Tier 1 = 1 ring centered.
 		// Tier 2 = 2 rings side by side.
 		// Tier 3 = 3 rings arranged as a triangle (one top, two bottom).
 		ring_outer := [4]f32{0.365, 0.792, 0.647, alpha}
 		ring_inner := [4]f32{0.114, 0.620, 0.459, alpha}
 		fill, _ := tile_color(kind)
-		draw_ring :: proc(p: ^Platform, x, y, r_outer: f32, c_outer, c_fill, c_inner: [4]f32) {
-			p->draw_circle(x, y, r_outer,        c_outer)
-			p->draw_circle(x, y, r_outer * 0.7,  c_fill)
-			p->draw_circle(x, y, r_outer * 0.4,  c_inner)
+		draw_ring :: proc(p: ^Platform, x, y: f32, c_outer, c_fill, c_inner: [4]f32) {
+			p->draw_circle(x, y, 10, c_outer)
+			p->draw_circle(x, y,  7, c_fill)
+			p->draw_circle(x, y,  4, c_inner)
 		}
 		switch tier {
 		case 2:
-			r := f32(7)
-			draw_ring(p, cx - 8, cy, r, ring_outer, fill, ring_inner)
-			draw_ring(p, cx + 8, cy, r, ring_outer, fill, ring_inner)
+			draw_ring(p, cx - 12, cy, ring_outer, fill, ring_inner)
+			draw_ring(p, cx + 12, cy, ring_outer, fill, ring_inner)
 		case 3:
-			r := f32(6)
-			draw_ring(p, cx,     cy - 6, r, ring_outer, fill, ring_inner)
-			draw_ring(p, cx - 7, cy + 5, r, ring_outer, fill, ring_inner)
-			draw_ring(p, cx + 7, cy + 5, r, ring_outer, fill, ring_inner)
+			draw_ring(p, cx,      cy - 12, ring_outer, fill, ring_inner)
+			draw_ring(p, cx - 12, cy +  8, ring_outer, fill, ring_inner)
+			draw_ring(p, cx + 12, cy +  8, ring_outer, fill, ring_inner)
 		case:
-			draw_ring(p, cx, cy, 10, ring_outer, fill, ring_inner)
+			draw_ring(p, cx, cy, ring_outer, fill, ring_inner)
 		}
 	}
 }
