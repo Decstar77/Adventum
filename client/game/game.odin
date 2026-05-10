@@ -424,14 +424,22 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	timer_y := f32(16) + font_large
 	p->draw_text((sw - tw_timer) * 0.5, timer_y, timer_str, {0.95, 0.95, 0.98, 1}, .Large)
 
-	// Surge countdown directly underneath.
+	// Surge countdown directly underneath, with the current wave number.
+	// During an active surge the wave is `last_surge_num` (the one firing);
+	// otherwise it's `surge_index + 1` (the wave that's coming next).
+	wave_num: i32
 	if g.world.waves.surge_active {
-		active_str := "SURGE ACTIVE"
+		wave_num = g.world.waves.last_surge_num
+	} else {
+		wave_num = g.world.waves.surge_index + 1
+	}
+	if g.world.waves.surge_active {
+		active_str := fmt.tprintf("WAVE %d  -  SURGE ACTIVE", wave_num)
 		aw := p->text_measure(active_str, .Small)
 		p->draw_text((sw - aw) * 0.5, timer_y + 14, active_str, {1.00, 0.55, 0.55, 1}, .Small)
 	} else {
 		rem := waves_time_to_next_surge(&g.world.waves)
-		cd_str := fmt.tprintf("Next surge in %.0fs", rem)
+		cd_str := fmt.tprintf("Wave %d  -  next surge in %.0fs", wave_num, rem)
 		cw := p->text_measure(cd_str, .Small)
 		p->draw_text((sw - cw) * 0.5, timer_y + 14, cd_str, {0.78, 0.82, 0.92, 1}, .Small)
 	}

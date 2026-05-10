@@ -54,15 +54,13 @@ trickle_interval :: proc(t: f32) -> f32 {
 
 @(private="file")
 surge_composition :: proc(index: i32) -> (crawlers, brutes, spitters: i32) {
+	// `index` is 0-based (first surge => 0). Every wave includes at least one
+	// of each kind so the player actually sees the variety the game has — the
+	// previous gating ("brutes from wave 2, spitters from wave 2") meant
+	// players who died on wave 1 never saw them at all.
 	crawlers = 8 + index * 2
-	if index >= 1 {
-		brutes = 2 + index * 2
-	}
-	// Spitters debut on the second surge and ramp slowly — they harass at
-	// stand-off range and pair well with the contact-melee fodder.
-	if index >= 1 {
-		spitters = 2 + index
-	}
+	brutes   = 2 + index * 2
+	spitters = 2 + index
 	return
 }
 
