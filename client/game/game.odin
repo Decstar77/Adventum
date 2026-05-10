@@ -223,8 +223,8 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		before := camera_screen_to_world(&g.cam, p.mouse, sw, sh)
 		zoom_factor := f32(1) + p.scroll_dy * 0.1
 		g.cam.zoom *= zoom_factor
-		if g.cam.zoom < 0.1 do g.cam.zoom = 0.1
-		if g.cam.zoom > 8   do g.cam.zoom = 8
+		if g.cam.zoom < 0.6 do g.cam.zoom = 0.6
+		if g.cam.zoom > 1.2   do g.cam.zoom = 1.2
 		after := camera_screen_to_world(&g.cam, p.mouse, sw, sh)
 		g.cam.pos += before - after
 	}
@@ -250,6 +250,16 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		if p->is_key_just_pressed(.V) do enemy_spawn(&g.world, .Spitter)
 		// F6: skip the surge cooldown and fire the next wave on this frame.
 		if p->is_key_just_pressed(.F6) do waves_force_next_surge(&g.world.waves)
+
+		// Space upgrades the selected tile — same affordability/cap rules as
+		// the panel's Upgrade button, just bound to a hotkey for convenience.
+		if g.has_selection && p->is_key_just_pressed(.Space) {
+			if tile, ok := g.world.tiles[g.selected_tile]; ok && tile_is_upgradeable(tile.kind) {
+				if tile.tier < tile_max_tier(tile.kind) && g.world.food >= tile_upgrade_cost(tile.kind, tile.tier) {
+					world_upgrade(&g.world, g.selected_tile)
+				}
+			}
+		}
 	}
 
 	if !paused && g.world.game_over && p->is_key_just_pressed(.R) {

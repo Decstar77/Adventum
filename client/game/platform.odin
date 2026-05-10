@@ -21,6 +21,7 @@ Key :: enum {
 	Num1, Num2, Num3, Num4, Num5, Num6,
 	Escape,
 	Enter,
+	Space,
 	Left_Shift, Right_Shift,
 	F6, // debug: force the next surge wave immediately
 }

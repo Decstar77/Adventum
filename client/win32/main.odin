@@ -213,6 +213,7 @@ glfw_key_to_game :: proc "contextless" (k: i32) -> game.Key {
 	case glfw.KEY_6:           return .Num6
 	case glfw.KEY_ESCAPE:      return .Escape
 	case glfw.KEY_ENTER:       return .Enter
+	case glfw.KEY_SPACE:       return .Space
 	case glfw.KEY_LEFT_SHIFT:  return .Left_Shift
 	case glfw.KEY_RIGHT_SHIFT: return .Right_Shift
 	case glfw.KEY_F6:          return .F6
