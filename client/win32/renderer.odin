@@ -123,6 +123,13 @@ renderer_begin_frame :: proc(r: ^Renderer) -> (cb: vk.CommandBuffer, ok: bool) {
 	vk.WaitForFences(r.device, 1, &r.in_flight_fences[frame], true, max(u64))
 
 	acq := vk.AcquireNextImageKHR(r.device, r.swapchain, max(u64), r.image_avail_sems[frame], 0, &r.current_image_index)
+	if acq == .ERROR_OUT_OF_DATE_KHR {
+		// Surface no longer matches the swapchain (window was resized, moved
+		// across monitors, or toggled fullscreen). Rebuild and skip this frame
+		// — the semaphore wasn't signalled, so we must not submit.
+		renderer_recreate_swapchain(r)
+		return cb, false
+	}
 	if acq != .SUCCESS && acq != .SUBOPTIMAL_KHR {
 		fmt.eprintfln("AcquireNextImageKHR: %v", acq)
 		return cb, false
@@ -190,7 +197,14 @@ renderer_end_frame :: proc(r: ^Renderer) {
 		pSwapchains        = &r.swapchain,
 		pImageIndices      = &image_index,
 	}
-	vk.QueuePresentKHR(r.present_queue, &present)
+	pres := vk.QueuePresentKHR(r.present_queue, &present)
+	if pres == .ERROR_OUT_OF_DATE_KHR || pres == .SUBOPTIMAL_KHR {
+		// Surface mismatch detected at present time — typical on Windows after
+		// a fullscreen toggle. Rebuild before the next acquire.
+		renderer_recreate_swapchain(r)
+	} else if pres != .SUCCESS {
+		fmt.eprintfln("QueuePresentKHR: %v", pres)
+	}
 
 	r.current_frame = (frame + 1) % MAX_FRAMES_IN_FLIGHT
 }
