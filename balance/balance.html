@@ -1,0 +1,625 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Adventum — Balance Sandbox</title>
+<style>
+  :root {
+    --bg: #14161b;
+    --panel: #1c1f26;
+    --panel2: #232730;
+    --line: #2c313c;
+    --text: #e7e9ee;
+    --dim: #9aa1ad;
+    --accent: #6cc5ff;
+    --good: #74d18a;
+    --warn: #f0c060;
+    --bad: #ef6a6a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 13px; margin: 14px 0 6px; color: var(--dim); text-transform: uppercase;
+    letter-spacing: 0.08em; font-weight: 600; }
+  .layout { display: grid; grid-template-columns: 320px 1fr; min-height: 100vh; }
+  .sidebar { background: var(--panel); padding: 14px 16px; overflow-y: auto;
+    border-right: 1px solid var(--line); }
+  .main { padding: 16px 20px; overflow-y: auto; }
+  .row { display: grid; grid-template-columns: 1fr 60px; gap: 8px; align-items: center;
+    margin: 4px 0; }
+  .row label { color: var(--dim); font-size: 12px; }
+  .row input[type=range] { width: 100%; accent-color: var(--accent); }
+  .row .val { font-variant-numeric: tabular-nums; text-align: right; color: var(--text);
+    font-size: 12px; }
+  .group { background: var(--panel2); border: 1px solid var(--line); border-radius: 6px;
+    padding: 8px 10px; margin: 6px 0; }
+  .group .title { font-weight: 600; font-size: 12px; color: var(--accent);
+    margin: 0 0 4px; }
+  button { background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+  button:hover { background: #2c313c; }
+  .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .chart-card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+    padding: 10px; }
+  .chart-card h3 { margin: 0 0 6px; font-size: 12px; color: var(--dim);
+    text-transform: uppercase; letter-spacing: 0.06em; }
+  canvas { width: 100%; height: 220px; display: block; }
+  .summary { background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+    padding: 10px 12px; margin-bottom: 12px; }
+  .summary table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  .summary td, .summary th { padding: 3px 8px; text-align: left;
+    border-bottom: 1px solid var(--line); }
+  .summary th { color: var(--dim); font-weight: 600; font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.05em; }
+  .summary tr:last-child td { border-bottom: none; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .pos { color: var(--good); }
+  .neg { color: var(--bad); }
+  .warn { color: var(--warn); }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 11px; color: var(--dim);
+    margin-top: 6px; }
+  .legend span { display: inline-flex; align-items: center; gap: 4px; }
+  .legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  .strategy { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0; }
+  .strategy button.active { border-color: var(--accent); color: var(--accent); }
+  details summary { cursor: pointer; color: var(--dim); font-size: 12px; padding: 4px 0; }
+  .small { font-size: 11px; color: var(--dim); }
+</style>
+</head>
+<body>
+<div class="layout">
+
+<div class="sidebar">
+  <h1>Adventum Balance Sandbox</h1>
+  <div class="small">Tweak the knobs; charts on the right update live. Defaults match the
+    current source as of this snapshot.</div>
+
+  <h2>Player strategy</h2>
+  <div class="strategy" id="strategy"></div>
+  <div class="small" id="strategy-desc"></div>
+
+  <h2>Economy</h2>
+  <div class="group">
+    <div class="row"><label>Starting food</label>
+      <input type="range" id="start_food" min="0" max="100" step="1" value="30"><span class="val" data-for="start_food"></span></div>
+    <div class="row"><label>Farm cost</label>
+      <input type="range" id="farm_cost" min="1" max="40" step="1" value="5"><span class="val" data-for="farm_cost"></span></div>
+    <div class="row"><label>Farm T1 food/s</label>
+      <input type="range" id="farm_rate_1" min="0" max="3" step="0.05" value="1.0"><span class="val" data-for="farm_rate_1"></span></div>
+    <div class="row"><label>Farm T2 food/s</label>
+      <input type="range" id="farm_rate_2" min="0" max="4" step="0.05" value="1.6"><span class="val" data-for="farm_rate_2"></span></div>
+    <div class="row"><label>Farm T3 food/s</label>
+      <input type="range" id="farm_rate_3" min="0" max="6" step="0.05" value="2.4"><span class="val" data-for="farm_rate_3"></span></div>
+  </div>
+
+  <h2>Build costs</h2>
+  <div class="group">
+    <div class="row"><label>Wall</label>
+      <input type="range" id="cost_wall" min="1" max="30" step="1" value="3"><span class="val" data-for="cost_wall"></span></div>
+    <div class="row"><label>Wire</label>
+      <input type="range" id="cost_wire" min="1" max="30" step="1" value="4"><span class="val" data-for="cost_wire"></span></div>
+    <div class="row"><label>Relay</label>
+      <input type="range" id="cost_relay" min="1" max="40" step="1" value="8"><span class="val" data-for="cost_relay"></span></div>
+    <div class="row"><label>Generator</label>
+      <input type="range" id="cost_gen" min="1" max="40" step="1" value="10"><span class="val" data-for="cost_gen"></span></div>
+    <div class="row"><label>Turret</label>
+      <input type="range" id="cost_turret" min="1" max="60" step="1" value="15"><span class="val" data-for="cost_turret"></span></div>
+  </div>
+
+  <h2>Turret</h2>
+  <div class="group">
+    <div class="row"><label>Damage (T1)</label>
+      <input type="range" id="t_dmg" min="1" max="40" step="0.5" value="8"><span class="val" data-for="t_dmg"></span></div>
+    <div class="row"><label>T2/T3 dmg mult</label>
+      <input type="range" id="t_mult" min="1" max="3" step="0.05" value="1.6"><span class="val" data-for="t_mult"></span></div>
+    <div class="row"><label>Fire interval (s)</label>
+      <input type="range" id="t_int" min="0.2" max="3" step="0.05" value="0.9"><span class="val" data-for="t_int"></span></div>
+    <div class="row"><label>Range (px)</label>
+      <input type="range" id="t_range" min="100" max="600" step="10" value="280"><span class="val" data-for="t_range"></span></div>
+  </div>
+
+  <h2>Enemies</h2>
+  <div class="group">
+    <div class="row"><label>Crawler HP</label>
+      <input type="range" id="c_hp" min="5" max="100" step="1" value="20"><span class="val" data-for="c_hp"></span></div>
+    <div class="row"><label>Crawler dmg/s</label>
+      <input type="range" id="c_dmg" min="1" max="40" step="1" value="10"><span class="val" data-for="c_dmg"></span></div>
+    <div class="row"><label>Brute HP</label>
+      <input type="range" id="b_hp" min="20" max="400" step="5" value="100"><span class="val" data-for="b_hp"></span></div>
+    <div class="row"><label>Brute dmg/s</label>
+      <input type="range" id="b_dmg" min="5" max="80" step="1" value="30"><span class="val" data-for="b_dmg"></span></div>
+    <div class="row"><label>Spitter HP</label>
+      <input type="range" id="s_hp" min="10" max="120" step="1" value="30"><span class="val" data-for="s_hp"></span></div>
+    <div class="row"><label>Spitter dmg/s</label>
+      <input type="range" id="s_dmg" min="1" max="50" step="1" value="14"><span class="val" data-for="s_dmg"></span></div>
+  </div>
+
+  <h2>Waves</h2>
+  <div class="group">
+    <div class="row"><label>Grace (s)</label>
+      <input type="range" id="grace" min="0" max="120" step="5" value="30"><span class="val" data-for="grace"></span></div>
+    <div class="row"><label>First surge (s)</label>
+      <input type="range" id="first_surge" min="30" max="240" step="5" value="90"><span class="val" data-for="first_surge"></span></div>
+    <div class="row"><label>Surge gap base (s)</label>
+      <input type="range" id="surge_gap" min="20" max="180" step="5" value="90"><span class="val" data-for="surge_gap"></span></div>
+    <div class="row"><label>Surge gap floor (s)</label>
+      <input type="range" id="surge_gap_min" min="10" max="120" step="5" value="30"><span class="val" data-for="surge_gap_min"></span></div>
+    <div class="row"><label>Trickle base iv (s)</label>
+      <input type="range" id="trickle_base" min="1" max="20" step="0.5" value="8"><span class="val" data-for="trickle_base"></span></div>
+    <div class="row"><label>Trickle ramp (/s)</label>
+      <input type="range" id="trickle_ramp" min="0" max="0.3" step="0.005" value="0.04"><span class="val" data-for="trickle_ramp"></span></div>
+    <div class="row"><label>Trickle floor (s)</label>
+      <input type="range" id="trickle_min" min="0.1" max="5" step="0.1" value="0.6"><span class="val" data-for="trickle_min"></span></div>
+    <div class="row"><label>Surge crawlers base</label>
+      <input type="range" id="sc_base" min="0" max="40" step="1" value="8"><span class="val" data-for="sc_base"></span></div>
+    <div class="row"><label>Surge crawlers /wave</label>
+      <input type="range" id="sc_step" min="0" max="10" step="1" value="2"><span class="val" data-for="sc_step"></span></div>
+    <div class="row"><label>Surge brutes base</label>
+      <input type="range" id="sb_base" min="0" max="20" step="1" value="2"><span class="val" data-for="sb_base"></span></div>
+    <div class="row"><label>Surge brutes /wave</label>
+      <input type="range" id="sb_step" min="0" max="10" step="1" value="2"><span class="val" data-for="sb_step"></span></div>
+    <div class="row"><label>Surge spitters base</label>
+      <input type="range" id="ss_base" min="0" max="20" step="1" value="2"><span class="val" data-for="ss_base"></span></div>
+    <div class="row"><label>Surge spitters /wave</label>
+      <input type="range" id="ss_step" min="0" max="10" step="1" value="1"><span class="val" data-for="ss_step"></span></div>
+  </div>
+
+  <div style="display:flex; gap:6px; margin: 10px 0;">
+    <button id="reset">Reset to defaults</button>
+    <button id="export">Export JSON</button>
+  </div>
+</div>
+
+<div class="main">
+  <div class="summary">
+    <h2 style="margin-top:0;">Snapshot @ t = <span id="snap_t">300</span>s
+      <input type="range" id="snap" min="30" max="900" step="10" value="300" style="width:300px; vertical-align:middle;">
+    </h2>
+    <table id="snap_tbl"></table>
+  </div>
+
+  <div class="charts">
+    <div class="chart-card">
+      <h3>Cumulative food (with assumed buildout)</h3>
+      <canvas id="c_food"></canvas>
+      <div class="legend">
+        <span><i style="background:#6cc5ff"></i>Food on hand</span>
+        <span><i style="background:#74d18a"></i>Spent (cumulative)</span>
+        <span><i style="background:#f0c060"></i>Income (food/s)</span>
+      </div>
+    </div>
+
+    <div class="chart-card">
+      <h3>Player DPS vs surge HP-per-second pressure</h3>
+      <canvas id="c_dps"></canvas>
+      <div class="legend">
+        <span><i style="background:#6cc5ff"></i>Player DPS (turrets)</span>
+        <span><i style="background:#ef6a6a"></i>Surge HP/s required to clear</span>
+        <span><i style="background:#9aa1ad"></i>Trickle HP/s</span>
+      </div>
+    </div>
+
+    <div class="chart-card">
+      <h3>Surge composition over time</h3>
+      <canvas id="c_surge"></canvas>
+      <div class="legend">
+        <span><i style="background:#74d18a"></i>Crawlers</span>
+        <span><i style="background:#f0c060"></i>Brutes</span>
+        <span><i style="background:#6cc5ff"></i>Spitters</span>
+        <span><i style="background:#ef6a6a; opacity:0.5;"></i>Surge total HP</span>
+      </div>
+    </div>
+
+    <div class="chart-card">
+      <h3>Build budget — turrets affordable from food alone</h3>
+      <canvas id="c_budget"></canvas>
+      <div class="legend">
+        <span><i style="background:#6cc5ff"></i>Cumulative turrets buildable</span>
+        <span><i style="background:#ef6a6a"></i>Turrets needed to no-leak</span>
+      </div>
+    </div>
+  </div>
+
+  <details style="margin-top:14px;">
+    <summary>How the simulation works</summary>
+    <div class="small" style="padding:8px 0; max-width:780px;">
+      <p>The "buildout" model assumes the player follows the chosen strategy: starting at <code>t = 0</code>
+      they spend whatever food is on hand on the strategy's queue (e.g. 5 farms first, then turrets/walls).
+      Food income at each instant equals <code>(farms · rate)</code>. Surges are scheduled per the wave
+      timing fields; each surge's required DPS = (incoming HP) / surge_duration. The "turrets needed"
+      line divides surge DPS by the assumed turret tier mix in the strategy. This is a rough analytic
+      model — it does not simulate aim cones, pathing, or HP attrition mid-surge.</p>
+    </div>
+  </details>
+</div>
+
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const inputs = document.querySelectorAll('input[type=range]');
+const defaults = {};
+inputs.forEach(i => defaults[i.id] = i.value);
+
+const SURGE_DURATION = 4;
+
+const STRATEGIES = {
+  'farm-rush': {
+    label: 'Farm rush',
+    desc: '5 farms ASAP, then alternate turret/wall. Mostly T1 turrets, a couple T2 by minute 5.',
+    farms_initial: 5,
+    turret_tier_avg: t => t < 180 ? 1.0 : t < 360 ? 1.4 : 1.8,
+    wall_per_turret: 1,
+  },
+  'turret-rush': {
+    label: 'Turret rush',
+    desc: 'Skip economy. 1 farm, 6 turrets early, walls only when threatened.',
+    farms_initial: 1,
+    turret_tier_avg: t => t < 180 ? 1.0 : t < 360 ? 1.3 : 1.6,
+    wall_per_turret: 0.5,
+  },
+  'balanced': {
+    label: 'Balanced',
+    desc: '3 farms, then 1 turret per farm. Upgrades start at minute 3.',
+    farms_initial: 3,
+    turret_tier_avg: t => t < 120 ? 1.0 : t < 300 ? 1.5 : 2.2,
+    wall_per_turret: 1,
+  },
+};
+
+let currentStrategy = 'balanced';
+const stratEl = $('strategy');
+Object.keys(STRATEGIES).forEach(k => {
+  const b = document.createElement('button');
+  b.textContent = STRATEGIES[k].label;
+  b.dataset.k = k;
+  if (k === currentStrategy) b.classList.add('active');
+  b.onclick = () => {
+    currentStrategy = k;
+    [...stratEl.children].forEach(c => c.classList.toggle('active', c.dataset.k === k));
+    $('strategy-desc').textContent = STRATEGIES[k].desc;
+    refresh();
+  };
+  stratEl.appendChild(b);
+});
+$('strategy-desc').textContent = STRATEGIES[currentStrategy].desc;
+
+function P() {
+  const get = id => parseFloat($(id).value);
+  return {
+    start_food: get('start_food'),
+    farm_cost: get('farm_cost'),
+    farm_rate: [get('farm_rate_1'), get('farm_rate_2'), get('farm_rate_3')],
+    cost: { wall: get('cost_wall'), wire: get('cost_wire'), relay: get('cost_relay'),
+            gen: get('cost_gen'), turret: get('cost_turret') },
+    t_dmg: get('t_dmg'), t_mult: get('t_mult'), t_int: get('t_int'), t_range: get('t_range'),
+    enemies: {
+      crawler: { hp: get('c_hp'), dmg: get('c_dmg') },
+      brute:   { hp: get('b_hp'), dmg: get('b_dmg') },
+      spitter: { hp: get('s_hp'), dmg: get('s_dmg') },
+    },
+    grace: get('grace'),
+    first_surge: get('first_surge'),
+    surge_gap: get('surge_gap'),
+    surge_gap_min: get('surge_gap_min'),
+    trickle_base: get('trickle_base'),
+    trickle_ramp: get('trickle_ramp'),
+    trickle_min: get('trickle_min'),
+    sc_base: get('sc_base'), sc_step: get('sc_step'),
+    sb_base: get('sb_base'), sb_step: get('sb_step'),
+    ss_base: get('ss_base'), ss_step: get('ss_step'),
+  };
+}
+
+// --- Sim --------------------------------------------------------------------
+
+// Per-tier turret damage given mult + back-gun-on-T3 rule from source.
+function turretDPS(p, tier) {
+  const dmg = tier === 1 ? p.t_dmg : p.t_dmg * p.t_mult;
+  const shots = tier === 3 ? 2 : 1;
+  return (dmg * shots) / p.t_int;
+}
+function avgTurretDPS(p, tierFloat) {
+  // interpolate across tiers
+  const lo = Math.floor(tierFloat);
+  const hi = Math.min(3, lo + 1);
+  const f = tierFloat - lo;
+  const dpsLo = turretDPS(p, Math.max(1, lo));
+  const dpsHi = turretDPS(p, Math.max(1, hi));
+  return dpsLo * (1 - f) + dpsHi * f;
+}
+
+function trickleInterval(p, t) {
+  const iv = p.trickle_base - p.trickle_ramp * t;
+  return Math.max(p.trickle_min, iv);
+}
+
+function surgeSchedule(p, tMax) {
+  // From source: next_surge_at = elapsed + max( i32(WAVE_SURGE_GAP) / surge_index, surge_gap_min )
+  const out = [];
+  let next = p.first_surge;
+  let idx = 0;
+  while (next <= tMax) {
+    out.push({ t: next, idx });
+    idx += 1;
+    const gap = Math.max(Math.floor(p.surge_gap / idx), p.surge_gap_min);
+    next = next + SURGE_DURATION + gap;
+  }
+  return out;
+}
+
+function surgeComposition(p, idx) {
+  return {
+    crawlers: p.sc_base + p.sc_step * idx,
+    brutes:   p.sb_base + p.sb_step * idx,
+    spitters: p.ss_base + p.ss_step * idx,
+  };
+}
+function surgeHP(p, idx) {
+  const c = surgeComposition(p, idx);
+  return c.crawlers * p.enemies.crawler.hp
+       + c.brutes   * p.enemies.brute.hp
+       + c.spitters * p.enemies.spitter.hp;
+}
+
+// Per-second economic + DPS profile, integrated.
+function simulate(p, tMax) {
+  const dt = 1.0;
+  const strat = STRATEGIES[currentStrategy];
+  const farmsInitial = strat.farms_initial;
+
+  // Build queue: spend food in order. Repeat "turret + wall + (every 5 turrets) generator"
+  // after the initial farm block. This is a coarse heuristic.
+  const queue = [];
+  for (let i = 0; i < farmsInitial; i++) queue.push({ kind: 'farm', cost: p.farm_cost });
+  for (let i = 0; i < 200; i++) {
+    queue.push({ kind: 'turret', cost: p.cost.turret });
+    if (strat.wall_per_turret >= 1 || (i % 2 === 0 && strat.wall_per_turret > 0)) {
+      const walls = Math.max(1, Math.round(strat.wall_per_turret));
+      for (let w = 0; w < walls; w++) queue.push({ kind: 'wall', cost: p.cost.wall });
+    }
+    if (i % 5 === 4) queue.push({ kind: 'gen', cost: p.cost.gen });
+  }
+
+  let food = p.start_food;
+  let spent = 0;
+  let farms = 0;
+  let turrets = 0;
+  let walls = 0;
+  let qIdx = 0;
+
+  const series = [];
+  for (let t = 0; t <= tMax; t += dt) {
+    const farmRate = farms * p.farm_rate[0]; // assume T1 farms in this analytic model
+    food += farmRate * dt;
+    // Spend on the next queue item if affordable.
+    while (qIdx < queue.length && food >= queue[qIdx].cost) {
+      const item = queue[qIdx++];
+      food -= item.cost;
+      spent += item.cost;
+      if (item.kind === 'farm') farms++;
+      if (item.kind === 'turret') turrets++;
+      if (item.kind === 'wall') walls++;
+    }
+    series.push({ t, food, spent, income: farmRate, farms, turrets, walls });
+  }
+  return series;
+}
+
+// --- Charts (no deps) -------------------------------------------------------
+
+function pickAxis(max) {
+  // Round up to nice number.
+  if (max <= 0) return 1;
+  const exp = Math.pow(10, Math.floor(Math.log10(max)));
+  const m = max / exp;
+  if (m <= 1) return 1 * exp;
+  if (m <= 2) return 2 * exp;
+  if (m <= 5) return 5 * exp;
+  return 10 * exp;
+}
+
+function drawChart(canvas, series, opts) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  const padL = 40, padR = 12, padT = 8, padB = 24;
+  const cw = w - padL - padR, ch = h - padT - padB;
+  const xs = series[0].xs;
+  const xMin = xs[0], xMax = xs[xs.length - 1];
+  let yMax = 0;
+  series.forEach(s => s.ys.forEach(v => { if (v > yMax) yMax = v; }));
+  yMax = pickAxis(yMax * 1.05);
+
+  // axes
+  ctx.strokeStyle = '#2c313c'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(padL, padT); ctx.lineTo(padL, padT + ch); ctx.lineTo(padL + cw, padT + ch);
+  ctx.stroke();
+  ctx.fillStyle = '#9aa1ad'; ctx.font = '10px sans-serif';
+
+  // y grid
+  for (let i = 0; i <= 4; i++) {
+    const y = padT + ch * (1 - i / 4);
+    const v = (yMax * i / 4);
+    ctx.strokeStyle = '#232730';
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + cw, y); ctx.stroke();
+    ctx.fillText(v.toFixed(v < 10 ? 1 : 0), 4, y + 3);
+  }
+  // x labels
+  for (let i = 0; i <= 5; i++) {
+    const tt = xMin + (xMax - xMin) * i / 5;
+    const x = padL + cw * i / 5;
+    ctx.fillText(tt.toFixed(0) + 's', x - 8, padT + ch + 14);
+  }
+
+  // markers (vertical lines for surges)
+  if (opts && opts.markers) {
+    opts.markers.forEach(m => {
+      const x = padL + cw * (m.t - xMin) / (xMax - xMin);
+      ctx.strokeStyle = m.color || 'rgba(239,106,106,0.4)';
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + ch); ctx.stroke();
+      ctx.setLineDash([]);
+    });
+  }
+
+  // series
+  series.forEach(s => {
+    ctx.strokeStyle = s.color;
+    ctx.fillStyle = s.fill || s.color;
+    ctx.lineWidth = s.width || 2;
+    ctx.beginPath();
+    for (let i = 0; i < s.xs.length; i++) {
+      const x = padL + cw * (s.xs[i] - xMin) / (xMax - xMin);
+      const y = padT + ch * (1 - s.ys[i] / yMax);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    if (s.bars) {
+      // draw thin bars
+      const bw = Math.max(2, cw / s.xs.length * 0.4);
+      ctx.fillStyle = s.color;
+      for (let i = 0; i < s.xs.length; i++) {
+        const x = padL + cw * (s.xs[i] - xMin) / (xMax - xMin);
+        const y = padT + ch * (1 - s.ys[i] / yMax);
+        ctx.fillRect(x - bw/2, y, bw, padT + ch - y);
+      }
+    }
+  });
+}
+
+function refresh() {
+  // Update slider readouts.
+  inputs.forEach(i => {
+    const v = $(`[data-for=${i.id}]`);
+    if (v) v.textContent = i.value;
+  });
+
+  const p = P();
+  const tMax = 600;
+  const sim = simulate(p, tMax);
+  const surges = surgeSchedule(p, tMax);
+
+  // ----- Chart 1: food, spent, income -----
+  drawChart($('c_food'), [
+    { xs: sim.map(s => s.t), ys: sim.map(s => s.food),  color: '#6cc5ff' },
+    { xs: sim.map(s => s.t), ys: sim.map(s => s.spent), color: '#74d18a' },
+    { xs: sim.map(s => s.t), ys: sim.map(s => s.income * 60), color: '#f0c060', width: 1.5 }, // scaled to food/min for readability
+  ], { markers: surges.map(s => ({ t: s.t })) });
+
+  // ----- Chart 2: DPS vs pressure -----
+  const xs = sim.map(s => s.t);
+  const playerDPS = sim.map(s => {
+    const tier = STRATEGIES[currentStrategy].turret_tier_avg(s.t);
+    return s.turrets * avgTurretDPS(p, tier);
+  });
+  // Surge HP/s pressure: piecewise during the 4s surge windows.
+  const surgePressure = xs.map(t => {
+    for (const s of surges) {
+      if (t >= s.t && t < s.t + SURGE_DURATION) {
+        return surgeHP(p, s.idx) / SURGE_DURATION;
+      }
+    }
+    return 0;
+  });
+  const tricklePressure = xs.map(t => {
+    if (t < p.grace) return 0;
+    return p.enemies.crawler.hp / trickleInterval(p, t);
+  });
+  drawChart($('c_dps'), [
+    { xs, ys: playerDPS, color: '#6cc5ff' },
+    { xs, ys: surgePressure, color: '#ef6a6a' },
+    { xs, ys: tricklePressure, color: '#9aa1ad', width: 1.2 },
+  ], { markers: surges.map(s => ({ t: s.t })) });
+
+  // ----- Chart 3: surge composition (bars at surge points) -----
+  const surgeXs = surges.map(s => s.t);
+  drawChart($('c_surge'), [
+    { xs: surgeXs, ys: surges.map(s => surgeComposition(p, s.idx).crawlers), color: '#74d18a', bars: true, width: 0 },
+    { xs: surgeXs, ys: surges.map(s => surgeComposition(p, s.idx).brutes),   color: '#f0c060', bars: true, width: 0 },
+    { xs: surgeXs, ys: surges.map(s => surgeComposition(p, s.idx).spitters), color: '#6cc5ff', bars: true, width: 0 },
+    // overlay: total HP scaled into the same axis (use a thin line)
+    { xs: surgeXs, ys: surges.map(s => surgeHP(p, s.idx) / 20), color: '#ef6a6a', width: 1.5 }, // /20 to fit
+  ]);
+
+  // ----- Chart 4: turrets buildable vs needed -----
+  const turretsBuilt = sim.map(s => s.turrets);
+  const turretsNeeded = xs.map(t => {
+    // Find the most recent surge ≤ t to compute "if surge fired now, how many turrets?"
+    let idx = -1;
+    for (const s of surges) if (s.t <= t + 60) idx = s.idx; else break;
+    if (idx < 0) return 0;
+    const tier = STRATEGIES[currentStrategy].turret_tier_avg(t);
+    const dps = avgTurretDPS(p, tier);
+    return Math.ceil((surgeHP(p, idx) / SURGE_DURATION) / Math.max(0.1, dps));
+  });
+  drawChart($('c_budget'), [
+    { xs, ys: turretsBuilt, color: '#6cc5ff' },
+    { xs, ys: turretsNeeded, color: '#ef6a6a' },
+  ], { markers: surges.map(s => ({ t: s.t })) });
+
+  // ----- Snapshot table -----
+  const snapT = parseFloat($('snap').value);
+  $('snap_t').textContent = snapT;
+  const snap = sim[Math.min(sim.length - 1, Math.round(snapT))];
+  const tier = STRATEGIES[currentStrategy].turret_tier_avg(snapT);
+  const dps = snap.turrets * avgTurretDPS(p, tier);
+  // Find next surge after snapT
+  const nextSurge = surges.find(s => s.t >= snapT) || surges[surges.length - 1];
+  const lastSurge = [...surges].reverse().find(s => s.t <= snapT);
+  const upcomingPressure = nextSurge ? surgeHP(p, nextSurge.idx) / SURGE_DURATION : 0;
+  const cushion = upcomingPressure > 0 ? dps / upcomingPressure : 0;
+
+  const rows = [
+    ['Farms built', snap.farms],
+    ['Turrets built', snap.turrets],
+    ['Walls built', snap.walls],
+    ['Food on hand', snap.food.toFixed(1)],
+    ['Food spent (cum.)', snap.spent.toFixed(0)],
+    ['Income', snap.income.toFixed(2) + ' food/s'],
+    ['Avg turret tier', tier.toFixed(2)],
+    ['Player DPS', dps.toFixed(1)],
+    ['Last surge', lastSurge ? `#${lastSurge.idx + 1} @ ${lastSurge.t}s (HP ${surgeHP(p, lastSurge.idx)})` : '—'],
+    ['Next surge', nextSurge ? `#${nextSurge.idx + 1} @ ${nextSurge.t}s (HP ${surgeHP(p, nextSurge.idx)})` : '—'],
+    ['Next surge pressure', upcomingPressure.toFixed(1) + ' HP/s'],
+    ['DPS / pressure', cushion.toFixed(2) + (cushion >= 1.2 ? '   safe'
+      : cushion >= 0.9 ? '   tight' : '   under-defended')],
+    ['Farm payback', (p.farm_cost / Math.max(0.01, p.farm_rate[0])).toFixed(1) + ' s'],
+  ];
+  const tbl = $('snap_tbl');
+  tbl.innerHTML = `<tr><th>metric</th><th class="num">value</th></tr>` +
+    rows.map(r => {
+      let cls = '';
+      if (r[0] === 'DPS / pressure') {
+        cls = cushion >= 1.2 ? 'pos' : cushion >= 0.9 ? 'warn' : 'neg';
+      }
+      return `<tr><td>${r[0]}</td><td class="num ${cls}">${r[1]}</td></tr>`;
+    }).join('');
+}
+
+inputs.forEach(i => i.addEventListener('input', refresh));
+$('snap').addEventListener('input', refresh);
+$('reset').addEventListener('click', () => {
+  inputs.forEach(i => i.value = defaults[i.id]);
+  refresh();
+});
+$('export').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(P(), null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'balance.json'; a.click();
+  URL.revokeObjectURL(url);
+});
+window.addEventListener('resize', refresh);
+refresh();
+</script>
+</body>
+</html>

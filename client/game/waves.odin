@@ -1,10 +1,18 @@
 package game
 
+import "core:math/rand"
+
 // Hard grace period: nothing spawns (trickle or surge) before this many
-// seconds, so the player has time to lay out their opening base.
-WAVE_GRACE_PERIOD    :: f32(30)
+// seconds, so the player has time to lay out their opening base. Tightened
+// from 30s — the old window let an unchallenged player snowball 5+ farms
+// before any pressure existed.
+WAVE_GRACE_PERIOD    :: f32(15)
 WAVE_FIRST_SURGE_AT  :: f32(90)
-WAVE_SURGE_GAP       :: f32(90)
+
+// Base seconds between surges (used as a coefficient — see waves_update).
+// Cut from 90 because we now scale UP with composition, not down.
+WAVE_SURGE_GAP       :: f32(60)
+WAVE_SURGE_GAP_MIN   :: f32(45)
 WAVE_SURGE_DURATION  :: f32(4)
 WAVE_BANNER_DURATION :: f32(3)
 
@@ -75,6 +83,40 @@ surge_composition :: proc(index: i32) -> (crawlers, brutes, spitters: i32) {
 	return
 }
 
+// Total raw HP arriving in the surge with the given index. Used to scale the
+// gap to the next surge so the player has proportionally more breathing room
+// as composition grows — keeps "DPS required to clear" closer to constant
+// instead of running away on a fixed-cadence schedule.
+@(private="file")
+surge_total_hp :: proc(index: i32) -> f32 {
+	crawlers, brutes, spitters := surge_composition(index)
+	chp, _, _ := enemy_stats(.Crawler)
+	bhp, _, _ := enemy_stats(.Brute)
+	shp, _, _ := enemy_stats(.Spitter)
+	return f32(crawlers) * chp + f32(brutes) * bhp + f32(spitters) * shp
+}
+
+// Pick the kind to spawn for a single trickle tick. Past the early game the
+// trickle gets meaner — without this it floors at 1 crawler / 0.6s and stops
+// being a threat once a single T1 turret is up. surge_index is the count of
+// surges already fired, so this only kicks in after the player has *seen* the
+// kind being mixed in.
+@(private="file")
+trickle_kind :: proc(surge_index: i32) -> Enemy_Kind {
+	switch {
+	case surge_index >= 3:
+		// Hardened mix: crawlers still dominate but brutes/spitters bleed in.
+		r := rand.float32()
+		if r < 0.15 do return .Brute
+		if r < 0.40 do return .Spitter
+	case surge_index >= 1:
+		// First taste of variety after the opening surge.
+		r := rand.float32()
+		if r < 0.20 do return .Spitter
+	}
+	return .Crawler
+}
+
 waves_update :: proc(world: ^World, w: ^Wave_State, dt: f32) {
 	w.elapsed += dt
 	if w.banner_time > 0 do w.banner_time -= dt
@@ -95,7 +137,7 @@ waves_update :: proc(world: ^World, w: ^Wave_State, dt: f32) {
 	iv := trickle_interval(w.elapsed)
 	for w.trickle_acc >= iv {
 		w.trickle_acc -= iv
-		enemy_spawn(world, .Crawler)
+		enemy_spawn(world, trickle_kind(w.surge_index))
 	}
 
 	// Trigger a new surge.
@@ -138,7 +180,17 @@ waves_update :: proc(world: ^World, w: ^Wave_State, dt: f32) {
 		if len(w.surge.queue) == 0 {
 			w.surge_active   = false
 			w.surge_index   += 1
-			w.next_surge_at  = w.elapsed + f32(max( i32(WAVE_SURGE_GAP) / w.surge_index, 30 ))
+			// Gap to the next surge scales with composition. The old rule
+			// (90 / surge_index, floored at 30) shrunk to a 30s floor by
+			// surge 3 and never recovered — surges arriving every 30s with
+			// linearly-growing HP is a curve no realistic build rate beats.
+			// Now: ratio = (next surge HP) / (first surge HP); larger surge
+			// ⇒ proportionally more breathing room, with a hard floor so we
+			// never sit forever between waves.
+			ratio := surge_total_hp(w.surge_index) / surge_total_hp(0)
+			gap   := WAVE_SURGE_GAP * ratio
+			if gap < WAVE_SURGE_GAP_MIN do gap = WAVE_SURGE_GAP_MIN
+			w.next_surge_at  = w.elapsed + gap
 		}
 	}
 }

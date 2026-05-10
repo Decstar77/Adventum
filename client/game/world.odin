@@ -17,7 +17,7 @@ TILE_KIND_COUNT :: len(Tile_Kind)
 BUILDABLE_COUNT :: TILE_KIND_COUNT - 1
 
 BUILD_RANGE :: 2
-START_FOOD  :: f32(30)
+START_FOOD  :: f32(15)
 
 Tile :: struct {
 	kind:      Tile_Kind,
@@ -60,13 +60,16 @@ generator_radius :: proc(tier: i32) -> i32 {
 	return 1
 }
 
-// Per-Farm food production per second.
+// Per-Farm food production per second. Halved from the original 1.0/1.6/2.4
+// curve — at the old rate a farm paid for itself in 5s, which trivialised the
+// economy during the opening grace window. New payback at T1 is 10s, which
+// still rewards an early eco rush but forces a real farm-vs-defense tradeoff.
 farm_food_rate :: proc(tier: i32) -> f32 {
 	switch tier {
-	case 2: return 1.6
-	case 3: return 2.4
+	case 2: return 0.8
+	case 3: return 1.2
 	}
-	return 1.0
+	return 0.5
 }
 
 // Relay build radius in hexes (overrides BUILD_RANGE for relays).
@@ -130,7 +133,7 @@ tile_cost :: proc(kind: Tile_Kind) -> f32 {
 	case .Generator: return 10
 	case .Wire:      return 4
 	case .Turret:    return 15
-	case .Wall:      return 3
+	case .Wall:      return 5
 	case .Relay:     return 8
 	}
 	return 0
