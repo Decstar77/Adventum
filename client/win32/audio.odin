@@ -14,9 +14,26 @@ package main
 import "core:fmt"
 import "core:math/rand"
 import "core:strings"
+import "core:time"
 import ma "vendor:miniaudio"
 
 import "../game"
+
+// Minimum gap between consecutive plays of the same family. Catches rapid
+// re-fires that the per-frame coalescer in `game_update_and_render` can't
+// see — e.g. one turret salvo per tick, two ticks landing in adjacent frames.
+// Buttons and place are 0 ms so the response stays snappy.
+@(private="file")
+SOUND_MIN_INTERVAL := [game.Sound]time.Duration{
+	.None             = 0,
+	.Button_Hover     = 50  * time.Millisecond,
+	.Button_Click     = 0,
+	.Place_Building   = 0,
+	.Building_Explode = 60  * time.Millisecond,
+	.Turret_Shoot     = 60  * time.Millisecond,
+	.Enemy_Attack     = 80  * time.Millisecond,
+	.Enemy_Die        = 60  * time.Millisecond,
+}
 
 // Variants per family. Order matches `res/sounds/`; randomly sampled at play.
 @(private="file")
@@ -46,11 +63,12 @@ SOUND_FILES := [game.Sound][]string{
 }
 
 Audio :: struct {
-	engine:    ma.engine,
-	ready:     bool,
+	engine:      ma.engine,
+	ready:       bool,
 	// We need null-terminated paths to hand to miniaudio. Build them once at
 	// init so play_sound is allocation-free at the call site.
-	cpaths:    [game.Sound][dynamic]cstring,
+	cpaths:      [game.Sound][dynamic]cstring,
+	last_played: [game.Sound]time.Tick,
 }
 
 audio_init :: proc(a: ^Audio) -> bool {
@@ -86,6 +104,15 @@ audio_play :: proc(a: ^Audio, sound: game.Sound) {
 	if !a.ready do return
 	variants := a.cpaths[sound]
 	if len(variants) == 0 do return
+
+	// Per-family cooldown gate. Drop the call if the last play of this family
+	// was too recent — keeps adjacent-frame stacking from re-introducing the
+	// "wall of shots" the per-frame coalescer just suppressed.
+	now := time.tick_now()
+	min_iv := SOUND_MIN_INTERVAL[sound]
+	if min_iv > 0 && time.tick_diff(a.last_played[sound], now) < min_iv do return
+	a.last_played[sound] = now
+
 	idx := 0 if len(variants) == 1 else rand.int_max(len(variants))
 	// Result is intentionally ignored: a missing file or a transient device
 	// hiccup shouldn't take the game down.

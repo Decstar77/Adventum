@@ -40,6 +40,14 @@ const SOUND_FILES = [
 const POOL_PER_VARIANT = 4; // headroom for overlapping plays of the same wav
 let masterVolume = 1.0;
 
+// Per-family minimum gap between consecutive plays. Mirrors the win32 host's
+// table; together with the per-frame coalescer in the game, it stops a synced
+// salvo (18 turrets on one tick) and rapid cross-frame repeats from stacking.
+// Indices match the Sound enum: 0=None, 1=Hover, 2=Click, 3=Place, 4=Explode,
+// 5=Turret, 6=Enemy_Attack, 7=Enemy_Die.
+const SOUND_MIN_INTERVAL_MS = [0, 50, 0, 0, 60, 60, 80, 60];
+const lastPlayedMs = new Array(SOUND_MIN_INTERVAL_MS.length).fill(-Infinity);
+
 const soundPool = SOUND_FILES.map(variants =>
 	variants.map(src => {
 		const pool = [];
@@ -55,6 +63,12 @@ const soundPool = SOUND_FILES.map(variants =>
 function playSound(soundIdx) {
 	const variants = soundPool[soundIdx];
 	if (!variants || variants.length === 0) return;
+
+	const minIv = SOUND_MIN_INTERVAL_MS[soundIdx] || 0;
+	const now = performance.now();
+	if (minIv > 0 && now - lastPlayedMs[soundIdx] < minIv) return;
+	lastPlayedMs[soundIdx] = now;
+
 	const v = variants[(Math.random() * variants.length) | 0];
 	const a = v.pool[v.cursor];
 	v.cursor = (v.cursor + 1) % v.pool.length;

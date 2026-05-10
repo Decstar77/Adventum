@@ -115,7 +115,7 @@ game_init :: proc(g: ^Game) {
 	g.cam = Camera{pos = {0, 0}, zoom = 1}
 	g.selected_kind = .Farm
 	g.mode = .Default
-	g.volume = 0.7
+	g.volume = 0.1
 	world_init(&g.world)
 	// Initial energization pass so the Core's energized flag is correct from frame 0.
 	world_tick(&g.world, 0)
@@ -295,10 +295,18 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		}
 	}
 
-	// Flush the simulation's queued sounds. We do this regardless of pause:
-	// queued events from the last unpaused tick should still play out, and the
-	// queue is empty on a paused frame anyway.
-	for s in g.world.sound_queue do p->play_sound(s)
+	// Flush the simulation's queued sounds. We collapse a frame's queue to at
+	// most one play per family — eighteen turrets firing on the same tick stop
+	// sounding like a wall of noise; the player still hears "shot" once. The
+	// host-side per-family cooldown extends the same protection across
+	// adjacent frames. Done regardless of pause: the queue is empty on a
+	// paused frame anyway.
+	seen: [Sound]bool
+	for s in g.world.sound_queue {
+		if seen[s] do continue
+		seen[s] = true
+		p->play_sound(s)
+	}
 	clear(&g.world.sound_queue)
 
 	// Picker bar layout (used both for hit-test and for drawing later)

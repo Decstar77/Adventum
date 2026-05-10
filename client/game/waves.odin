@@ -187,10 +187,10 @@ waves_update :: proc(world: ^World, w: ^Wave_State, dt: f32) {
 			// Now: ratio = (next surge HP) / (first surge HP); larger surge
 			// ⇒ proportionally more breathing room, with a hard floor so we
 			// never sit forever between waves.
-			ratio := surge_total_hp(w.surge_index) / surge_total_hp(0)
-			gap   := WAVE_SURGE_GAP * ratio
-			if gap < WAVE_SURGE_GAP_MIN do gap = WAVE_SURGE_GAP_MIN
-			w.next_surge_at  = w.elapsed + gap
+			//ratio := surge_total_hp(w.surge_index) / surge_total_hp(0)
+			//gap   := WAVE_SURGE_GAP * ratio
+			//if gap < WAVE_SURGE_GAP_MIN do gap = WAVE_SURGE_GAP_MIN
+			w.next_surge_at  = w.elapsed + f32(max(90 / w.surge_index, 30))
 		}
 	}
 }
