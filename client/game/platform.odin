@@ -14,6 +14,20 @@ Font_Size :: enum {
 	Large,
 }
 
+// Sound families. The host owns the actual `.wav` assets and, where there are
+// multiple variants of one family (e.g. three turret-shoot recordings), picks
+// one at random per call so repeated plays don't sound mechanical.
+Sound :: enum {
+	None,
+	Button_Hover,
+	Button_Click,
+	Place_Building,
+	Building_Explode,
+	Turret_Shoot,
+	Enemy_Attack,
+	Enemy_Die,
+}
+
 Key :: enum {
 	Unknown,
 	W, A, S, D,
@@ -69,4 +83,10 @@ Platform :: struct {
 	// Window
 	toggle_fullscreen: proc(p: ^Platform),
 	request_quit:      proc(p: ^Platform),
+
+	// Audio. Game writes `master_volume` (0..1) each frame; the host applies it
+	// to the underlying audio engine. `play_sound` is fire-and-forget — the
+	// host is free to overlap copies of the same family.
+	master_volume: f32,
+	play_sound:    proc(p: ^Platform, sound: Sound),
 }

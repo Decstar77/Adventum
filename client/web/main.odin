@@ -26,6 +26,13 @@ foreign host {
 	js_pop_scissor       :: proc() ---
 	js_toggle_fullscreen :: proc() ---
 	js_request_quit      :: proc() ---
+	// Audio. Sound is identified by its `game.Sound` enum index; the JS host
+	// owns the per-family variant lists and picks one at random per call.
+	// miniaudio compiled to wasm could replace this in future, but the browser's
+	// HTMLAudioElement is sufficient for fire-and-forget SFX and avoids pulling
+	// the C library through emscripten.
+	js_play_sound        :: proc(sound: i32) ---
+	js_set_master_volume :: proc(v: f32) ---
 }
 
 App :: struct {
@@ -83,6 +90,10 @@ web_frame :: proc "c" (
 
 	game.game_update_and_render(&g_game, &g_platform)
 
+	// Mirror the game's current volume into the JS host so the slider drives
+	// the audio level without any extra plumbing.
+	js_set_master_volume(g_platform.master_volume)
+
 	// Edge-detect at end of frame: events that arrive between frames update
 	// keys_down only — keys_was_down still reflects last frame, so the first
 	// poll of just_pressed in the next frame fires correctly.
@@ -109,7 +120,13 @@ make_platform :: proc() -> game.Platform {
 		fog_lights_push     = plat_fog_lights_push,
 		toggle_fullscreen   = plat_toggle_fullscreen,
 		request_quit        = plat_request_quit,
+		play_sound          = plat_play_sound,
 	}
+}
+
+@(private="file")
+plat_play_sound :: proc(p: ^game.Platform, sound: game.Sound) {
+	js_play_sound(i32(sound))
 }
 
 @(private="file")

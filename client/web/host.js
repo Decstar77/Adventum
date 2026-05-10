@@ -6,6 +6,68 @@ const canvas = document.getElementById('screen');
 const ctx    = canvas.getContext('2d');
 const status = document.getElementById('status');
 
+// --- Audio ------------------------------------------------------------------
+//
+// One <audio>-style buffer pool per family. Indices match the `Sound` enum in
+// client/game/platform.odin: 0=None, 1=Hover, 2=Click, 3=Place, 4=Explode,
+// 5=Turret, 6=Enemy_Attack, 7=Enemy_Die. We keep N pre-loaded HTMLAudioElements
+// per family and round-robin through them so overlapping plays each get their
+// own playback head — a single Audio element can't play to itself in parallel.
+//
+// Files are served relative to host.js. `build_web.bat` mirrors `res/` into
+// the web build dir so the dev server (rooted at build/web/) can find them.
+
+const SOUND_FILES = [
+	[],                                                          // None
+	['res/sounds/button-hover.wav'],                       // Button_Hover
+	['res/sounds/button-click.wav'],                       // Button_Click
+	['res/sounds/place_building_1.wav',
+	 'res/sounds/place_building_2.wav'],                   // Place_Building
+	['res/sounds/building-explode.wav'],                   // Building_Explode
+	['res/sounds/turret_shoot-01.wav',
+	 'res/sounds/turret_shoot-02.wav',
+	 'res/sounds/turret_shoot-03.wav'],                    // Turret_Shoot
+	['res/sounds/enemy-attack-01.wav',
+	 'res/sounds/enemy-attack-02.wav',
+	 'res/sounds/enemy-attack-03.wav',
+	 'res/sounds/enemy-attack-04.wav',
+	 'res/sounds/enemy-attack-05.wav'],                    // Enemy_Attack
+	['res/sounds/enemy-die-01.wav',
+	 'res/sounds/enemy-die-02.wav',
+	 'res/sounds/enemy-die-03.wav'],                       // Enemy_Die
+];
+
+const POOL_PER_VARIANT = 4; // headroom for overlapping plays of the same wav
+let masterVolume = 1.0;
+
+const soundPool = SOUND_FILES.map(variants =>
+	variants.map(src => {
+		const pool = [];
+		for (let i = 0; i < POOL_PER_VARIANT; i++) {
+			const a = new Audio(new URL(src, import.meta.url).href);
+			a.preload = 'auto';
+			pool.push(a);
+		}
+		return { pool, cursor: 0 };
+	})
+);
+
+function playSound(soundIdx) {
+	const variants = soundPool[soundIdx];
+	if (!variants || variants.length === 0) return;
+	const v = variants[(Math.random() * variants.length) | 0];
+	const a = v.pool[v.cursor];
+	v.cursor = (v.cursor + 1) % v.pool.length;
+	try {
+		a.volume = masterVolume;
+		a.currentTime = 0;
+		// Browsers reject autoplay until the user has interacted. Ignore the
+		// rejection — once the player clicks or presses a key, subsequent
+		// plays will succeed.
+		a.play().catch(() => {});
+	} catch {}
+}
+
 // Camera: we apply the (scale, offset) manually inside each draw call so the
 // canvas's save/restore stack stays free for scissor clipping.
 let cam = { sx: 1, sy: 1, ox: 0, oy: 0 };
@@ -74,6 +136,8 @@ const host = {
 		else document.exitFullscreen?.();
 	},
 	js_request_quit: () => { window.close(); },
+	js_play_sound:        (sound) => { playSound(sound); },
+	js_set_master_volume: (v)     => { masterVolume = Math.max(0, Math.min(1, v)); },
 };
 
 // --- Input mapping. Indices must match the Key enum in client/game/platform.odin.

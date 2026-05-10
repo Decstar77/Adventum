@@ -62,6 +62,7 @@ Cost_Sign :: enum { Spend, Gain }
 button_with_food_cost :: proc(ui: ^UI, p: ^Platform, label: string, amount: i32, sign: Cost_Sign, x, y, w, h: f32) -> bool {
 	hover := point_in_rect(p.mouse, x, y, w, h)
 	held  := hover && p.mouse_left_down
+	ui_track_hover(ui, p, hover, ui_button_key(x, y))
 
 	BASE  := [4]f32{0.18, 0.20, 0.26, 1.0}
 	HOVER := [4]f32{0.26, 0.30, 0.40, 1.0}
@@ -97,7 +98,9 @@ button_with_food_cost :: proc(ui: ^UI, p: ^Platform, label: string, amount: i32,
 	icon_y := y + (h - icon_s) * 0.5
 	draw_food_icon(p, icon_x, icon_y, icon_s)
 
-	return hover && p.mouse_left_pressed
+	clicked := hover && p.mouse_left_pressed
+	if clicked do p->play_sound(.Button_Click)
+	return clicked
 }
 
 TICK_HZ :: 10.0
@@ -157,6 +160,11 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	dt := p.dt
 	sw := p.screen_w
 	sh := p.screen_h
+
+	// Push the current master volume to the host so the audio engine tracks the
+	// pause-menu slider in real time. Done first so any sounds emitted this
+	// frame (button clicks, simulation events) play at the right level.
+	p.master_volume = g.volume
 
 	// FPS readout (rolling, updated 4×/sec).
 	g.fps_accum += dt
@@ -287,6 +295,12 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		}
 	}
 
+	// Flush the simulation's queued sounds. We do this regardless of pause:
+	// queued events from the last unpaused tick should still play out, and the
+	// queue is empty on a paused frame anyway.
+	for s in g.world.sound_queue do p->play_sound(s)
+	clear(&g.world.sound_queue)
+
 	// Picker bar layout (used both for hit-test and for drawing later)
 	picker_h    := f32(56)
 	picker_pad  := f32(8)
@@ -307,8 +321,10 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	gear_x := sw - 12 - GEAR_S
 	gear_y := f32(12)
 	mouse_in_gear := point_in_rect(p.mouse, gear_x, gear_y, GEAR_S, GEAR_S)
+	ui_track_hover(&g.ui, p, mouse_in_gear, ui_button_key(gear_x, gear_y))
 	if !paused && mouse_in_gear && p.mouse_left_pressed {
 		g.paused = true
+		p->play_sound(.Button_Click)
 	}
 
 	// Hex under cursor

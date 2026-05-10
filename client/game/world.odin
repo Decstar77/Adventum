@@ -106,6 +106,15 @@ World :: struct {
 	survive_time:  f32,
 	game_over:     bool,
 	waves:         Wave_State,
+
+	// Sound effects queued by simulation code (turrets firing, enemies dying,
+	// tiles being destroyed). `game_update_and_render` drains this each frame
+	// and forwards the events to `Platform.play_sound`.
+	sound_queue:   [dynamic]Sound,
+}
+
+world_queue_sound :: proc(w: ^World, s: Sound) {
+	append(&w.sound_queue, s)
 }
 
 world_init :: proc(w: ^World) {
@@ -121,6 +130,7 @@ world_shutdown :: proc(w: ^World) {
 	delete(w.enemies)
 	delete(w.projectiles)
 	delete(w.particles)
+	delete(w.sound_queue)
 	path_field_destroy(&w.field_crawler)
 	path_field_destroy(&w.field_brute)
 	waves_shutdown(&w.waves)
@@ -168,6 +178,7 @@ world_place :: proc(w: ^World, c: Hex_Coord, kind: Tile_Kind) -> bool {
 	}
 	w.tiles[c] = tile
 	w.path_dirty = true
+	world_queue_sound(w, .Place_Building)
 	return true
 }
 

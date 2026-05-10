@@ -16,6 +16,7 @@ App :: struct {
 	window:   glfw.WindowHandle,
 	renderer: Renderer,
 	graphics: Graphics,
+	audio:    Audio,
 
 	// Input snapshot built up by GLFW callbacks; sampled into Platform fields
 	// once per frame.
@@ -77,6 +78,12 @@ main :: proc() {
 	}
 	defer gfx_shutdown(&app.graphics)
 
+	// Audio init failure is non-fatal — the game runs silently.
+	if !audio_init(&app.audio) {
+		fmt.eprintln("audio disabled")
+	}
+	defer audio_shutdown(&app.audio)
+
 	// Build the Platform once; per-frame state is refreshed at the top of the
 	// loop, fn pointers stay constant.
 	platform := game.Platform{
@@ -97,6 +104,7 @@ main :: proc() {
 		fog_lights_push     = plat_fog_lights_push,
 		toggle_fullscreen   = plat_toggle_fullscreen,
 		request_quit        = plat_request_quit,
+		play_sound          = plat_play_sound,
 	}
 
 	g: game.Game
@@ -160,6 +168,11 @@ main :: proc() {
 		}
 
 		game.game_update_and_render(&g, &platform)
+
+		// The game writes its current master volume into the platform each
+		// frame; mirror it into the audio engine so the pause-menu slider
+		// updates immediately.
+		audio_set_master_volume(&app.audio, platform.master_volume)
 
 		gfx_end(&app.graphics)
 		free_all(context.temp_allocator)
@@ -338,4 +351,9 @@ plat_toggle_fullscreen :: proc(p: ^game.Platform) {
 @(private="file")
 plat_request_quit :: proc(p: ^game.Platform) {
 	app_of(p).should_quit = true
+}
+
+@(private="file")
+plat_play_sound :: proc(p: ^game.Platform, sound: game.Sound) {
+	audio_play(&app_of(p).audio, sound)
 }

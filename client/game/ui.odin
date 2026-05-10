@@ -24,6 +24,32 @@ Layout_Frame :: struct {
 
 UI :: struct {
 	layouts: [dynamic]Layout_Frame,
+
+	// Hover-sound bookkeeping. Each rendered button records its rect-keyed id
+	// into `hover_key` when the mouse is over it; at the start of the next
+	// frame we compare against `prev_hover_key` to detect a *transition* into a
+	// new button and play the hover cue once. Bare "still hovering" frames go
+	// silent.
+	hover_key:      u64,
+	prev_hover_key: u64,
+}
+
+// Stable per-rect id derived from screen coordinates. Two pixels of jitter
+// won't change the hash, so a button that's drawn at the same position next
+// frame still matches.
+ui_button_key :: proc(x, y: f32) -> u64 {
+	return (u64(i32(x + 0.5)) & 0xFFFF_FFFF) | (u64(i32(y + 0.5)) << 32)
+}
+
+// Called by every button after its hit-test. Records the hover for the
+// frame's `hover_key`, and — if the mouse just moved onto a *different*
+// button — fires the hover cue.
+ui_track_hover :: proc(ui: ^UI, p: ^Platform, hover: bool, key: u64) {
+	if !hover do return
+	ui.hover_key = key
+	if key != ui.prev_hover_key {
+		p->play_sound(.Button_Hover)
+	}
 }
 
 ui_shutdown :: proc(ui: ^UI) {
@@ -32,6 +58,8 @@ ui_shutdown :: proc(ui: ^UI) {
 
 ui_begin_frame :: proc(ui: ^UI) {
 	clear(&ui.layouts)
+	ui.prev_hover_key = ui.hover_key
+	ui.hover_key      = 0
 }
 
 point_in_rect :: proc(p: [2]f32, x, y, w, h: f32) -> bool {
@@ -162,6 +190,7 @@ ui_slot :: proc(ui: ^UI, w: f32 = LAYOUT_FILL, h: f32 = LAYOUT_FILL) -> (rx, ry,
 ui_button_at :: proc(ui: ^UI, p: ^Platform, label: string, x, y, w, h: f32) -> bool {
 	hover := point_in_rect(p.mouse, x, y, w, h)
 	held  := hover && p.mouse_left_down
+	ui_track_hover(ui, p, hover, ui_button_key(x, y))
 
 	BASE  := [4]f32{0.18, 0.20, 0.26, 1.0}
 	HOVER := [4]f32{0.26, 0.30, 0.40, 1.0}
@@ -180,7 +209,9 @@ ui_button_at :: proc(ui: ^UI, p: ^Platform, label: string, x, y, w, h: f32) -> b
 	ty := y + h * 0.5 + p->font_size_px(.Small) * 0.3
 	p->draw_text(tx, ty, label, {1, 1, 1, 1}, .Small)
 
-	return hover && p.mouse_left_pressed
+	clicked := hover && p.mouse_left_pressed
+	if clicked do p->play_sound(.Button_Click)
+	return clicked
 }
 
 ui_button_slot :: proc(ui: ^UI, p: ^Platform, label: string, w: f32 = LAYOUT_FILL, h: f32 = LAYOUT_FILL) -> bool {

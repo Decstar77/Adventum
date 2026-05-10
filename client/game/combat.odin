@@ -110,6 +110,7 @@ turrets_fire :: proc(w: ^World, dt: f32) {
 					fire_bullet(w, origin, t.aim_angle + math.PI, dmg)
 				}
 				t.cooldown = TURRET_FIRE_INTERVAL
+				world_queue_sound(w, .Turret_Shoot)
 			}
 		}
 
@@ -152,6 +153,7 @@ sweep_dead_enemies :: proc(w: ^World) {
 		if w.enemies[i].hp <= 0 {
 			fx_emit_enemy_death(w, w.enemies[i].pos, w.enemies[i].kind)
 			w.scrap += scrap_for_kind(w.enemies[i].kind)
+			world_queue_sound(w, .Enemy_Die)
 			unordered_remove(&w.enemies, i)
 		}
 	}
