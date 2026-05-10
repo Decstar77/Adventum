@@ -9,12 +9,20 @@ Tile_Kind :: enum {
 	Turret,
 	Wall,
 	Relay,
+	Mortar,
 	Core,
 }
 
 TILE_KIND_COUNT :: len(Tile_Kind)
 // Core is unique and granted at world init; only the rest are placeable.
 BUILDABLE_COUNT :: TILE_KIND_COUNT - 1
+
+// Mortar requires the Core to be at least this tier before it can be placed.
+MORTAR_CORE_TIER_REQ :: i32(2)
+
+// Repair conversion: 1 scrap restores this many HP. Repair is rounded up to
+// whole scrap so a 1-HP top-up still costs at least one scrap.
+REPAIR_HP_PER_SCRAP :: f32(4)
 
 BUILD_RANGE :: 2
 START_FOOD  :: f32(15)
@@ -28,11 +36,12 @@ Tile :: struct {
 	aim_angle: f32, // turret barrel angle in radians (atan2 convention)
 }
 
-// Wire/Core are not upgradeable. Everything else maxes at tier 3.
+// Wire is the only flat tile now — Core gets a 3-tier path that unlocks
+// the Mortar and bumps its survivability.
 tile_max_tier :: proc(kind: Tile_Kind) -> i32 {
 	switch kind {
-	case .Wire, .Core: return 1
-	case .Farm, .Generator, .Turret, .Wall, .Relay: return 3
+	case .Wire: return 1
+	case .Farm, .Generator, .Turret, .Wall, .Relay, .Mortar, .Core: return 3
 	}
 	return 1
 }
@@ -44,6 +53,16 @@ tile_is_upgradeable :: proc(kind: Tile_Kind) -> bool {
 // Upgrade cost in food: scales with the destination tier.
 tile_upgrade_cost :: proc(kind: Tile_Kind, current_tier: i32) -> f32 {
 	if current_tier >= tile_max_tier(kind) do return 0
+	// Core has no placement cost (`tile_cost(.Core)` is 0), so the base-times-
+	// tier formula collapses to 0. Use a flat per-tier schedule instead so the
+	// upgrade is a real investment that gates the Mortar.
+	if kind == .Core {
+		switch current_tier {
+		case 1: return 40
+		case 2: return 80
+		}
+		return 0
+	}
 	base := tile_cost(kind)
 	// 1->2 costs base, 2->3 costs base * 2.
 	return base * f32(current_tier)
@@ -92,6 +111,33 @@ turret_has_back_gun :: proc(tier: i32) -> bool {
 	return tier >= 3
 }
 
+// Mortar tuning. Long range, slow fire, area-of-effect splash. Upgrades widen
+// the splash and grow the damage so a tier-3 mortar is a real cornerstone.
+MORTAR_RANGE_PIXELS  :: f32(440)
+MORTAR_FIRE_INTERVAL :: f32(2.4)
+MORTAR_ROT_SPEED     :: f32(3.5)
+MORTAR_AIM_TOLERANCE :: f32(0.25)
+MORTAR_PROJ_SPEED    :: f32(320)
+MORTAR_PROJ_LIFE     :: f32(3.0)
+MORTAR_BASE_DAMAGE   :: f32(22)
+MORTAR_BASE_SPLASH   :: f32(60)
+
+mortar_damage :: proc(tier: i32) -> f32 {
+	switch tier {
+	case 2: return MORTAR_BASE_DAMAGE * 1.4
+	case 3: return MORTAR_BASE_DAMAGE * 1.9
+	}
+	return MORTAR_BASE_DAMAGE
+}
+
+mortar_splash :: proc(tier: i32) -> f32 {
+	switch tier {
+	case 2: return MORTAR_BASE_SPLASH * 1.2
+	case 3: return MORTAR_BASE_SPLASH * 1.5
+	}
+	return MORTAR_BASE_SPLASH
+}
+
 World :: struct {
 	tiles:         map[Hex_Coord]Tile,
 	core:          Hex_Coord,
@@ -111,7 +157,25 @@ World :: struct {
 	// tiles being destroyed). `game_update_and_render` drains this each frame
 	// and forwards the events to `Platform.play_sound`.
 	sound_queue:   [dynamic]Sound,
+
+	// Core ability cooldowns (seconds remaining; 0 == ready). EMP doubles as a
+	// world-wide "enemies are frozen" timer in `emp_time`.
+	bomb_cooldown: f32,
+	emp_cooldown:  f32,
+	emp_time:      f32,
 }
+
+// Ability tuning. Both abilities cost food + scrap and share a cooldown each.
+BOMB_FOOD_COST   :: f32(20)
+BOMB_SCRAP_COST  :: i32(10)
+BOMB_COOLDOWN    :: f32(30)
+BOMB_RADIUS      :: f32(110)
+BOMB_DAMAGE      :: f32(90)
+
+EMP_FOOD_COST    :: f32(15)
+EMP_SCRAP_COST   :: i32(8)
+EMP_COOLDOWN     :: f32(40)
+EMP_DURATION     :: f32(5)
 
 world_queue_sound :: proc(w: ^World, s: Sound) {
 	append(&w.sound_queue, s)
@@ -119,7 +183,7 @@ world_queue_sound :: proc(w: ^World, s: Sound) {
 
 world_init :: proc(w: ^World) {
 	w.core = {0, 0}
-	w.tiles[w.core] = Tile{kind = .Core, tier = 1, hp = 200, energized = true}
+	w.tiles[w.core] = Tile{kind = .Core, tier = 1, hp = tile_max_hp(.Core, 1), energized = true}
 	w.food = START_FOOD
 	w.path_dirty = true
 	waves_init(&w.waves)
@@ -145,12 +209,13 @@ tile_cost :: proc(kind: Tile_Kind) -> f32 {
 	case .Turret:    return 15
 	case .Wall:      return 5
 	case .Relay:     return 8
+	case .Mortar:    return 30
 	}
 	return 0
 }
 
 tile_consumes_energy :: proc(kind: Tile_Kind) -> bool {
-	return kind == .Turret
+	return kind == .Turret || kind == .Mortar
 }
 
 world_in_build_range :: proc(w: ^World, c: Hex_Coord) -> bool {
@@ -162,10 +227,21 @@ world_in_build_range :: proc(w: ^World, c: Hex_Coord) -> bool {
 	return false
 }
 
+// Mortar is gated on the Core's current tier — at world init this is 1, so the
+// Mortar is invisible-but-not-gone in the picker until the player invests in an
+// upgrade. Keep the check broad: a missing Core (shouldn't happen mid-run) also
+// counts as "not allowed".
+mortar_unlocked :: proc(w: ^World) -> bool {
+	core, ok := w.tiles[w.core]
+	if !ok do return false
+	return core.tier >= MORTAR_CORE_TIER_REQ
+}
+
 world_can_place :: proc(w: ^World, c: Hex_Coord, kind: Tile_Kind) -> bool {
 	if kind == .Core do return false
 	if c in w.tiles do return false
 	if w.food < tile_cost(kind) do return false
+	if kind == .Mortar && !mortar_unlocked(w) do return false
 	return world_in_build_range(w, c)
 }
 
@@ -173,7 +249,7 @@ world_place :: proc(w: ^World, c: Hex_Coord, kind: Tile_Kind) -> bool {
 	if !world_can_place(w, c, kind) do return false
 	w.food -= tile_cost(kind)
 	tile := Tile{kind = kind, tier = 1, hp = tile_max_hp(kind, 1)}
-	if kind == .Turret {
+	if kind == .Turret || kind == .Mortar {
 		tile.aim_angle = -math.PI * 0.5 // start pointing up
 	}
 	w.tiles[c] = tile
@@ -218,6 +294,84 @@ world_remove :: proc(w: ^World, c: Hex_Coord) -> bool {
 	return true
 }
 
+// Repair pricing. Returns (missing_hp, scrap_cost). Round-up on scrap so a
+// 1-HP nudge still costs the player something — otherwise a building at
+// max-hp-minus-1 would be free to top up indefinitely.
+tile_repair_quote :: proc(w: ^World, c: Hex_Coord) -> (missing: f32, scrap_cost: i32, ok: bool) {
+	t, present := w.tiles[c]
+	if !present do return 0, 0, false
+	max_hp := tile_max_hp(t.kind, t.tier)
+	missing = max_hp - t.hp
+	if missing <= 0 do return 0, 0, false
+	scrap_f := missing / REPAIR_HP_PER_SCRAP
+	scrap_cost = i32(math.ceil(scrap_f))
+	if scrap_cost < 1 do scrap_cost = 1
+	return missing, scrap_cost, true
+}
+
+world_can_repair :: proc(w: ^World, c: Hex_Coord) -> bool {
+	_, cost, ok := tile_repair_quote(w, c)
+	if !ok do return false
+	return w.scrap >= cost
+}
+
+world_repair :: proc(w: ^World, c: Hex_Coord) -> bool {
+	missing, cost, ok := tile_repair_quote(w, c)
+	if !ok do return false
+	if w.scrap < cost do return false
+	t := w.tiles[c]
+	max_hp := tile_max_hp(t.kind, t.tier)
+	t.hp += missing
+	if t.hp > max_hp do t.hp = max_hp
+	w.tiles[c] = t
+	w.scrap -= cost
+	return true
+}
+
+// Spend food + scrap to detonate a bomb centred at world-space `pos`. Damages
+// every enemy in radius `BOMB_RADIUS` and emits an FX flash. Cooldown-gated so
+// the player can't chain it across one wave.
+world_can_use_bomb :: proc(w: ^World) -> bool {
+	if w.bomb_cooldown > 0 do return false
+	if w.food < BOMB_FOOD_COST do return false
+	if w.scrap < BOMB_SCRAP_COST do return false
+	return true
+}
+
+world_use_bomb :: proc(w: ^World, pos: [2]f32) -> bool {
+	if !world_can_use_bomb(w) do return false
+	w.food  -= BOMB_FOOD_COST
+	w.scrap -= BOMB_SCRAP_COST
+	w.bomb_cooldown = BOMB_COOLDOWN
+	r2 := BOMB_RADIUS * BOMB_RADIUS
+	for i in 0 ..< len(w.enemies) {
+		e := &w.enemies[i]
+		dx := e.pos.x - pos.x
+		dy := e.pos.y - pos.y
+		if dx*dx + dy*dy <= r2 do e.hp -= BOMB_DAMAGE
+	}
+	fx_emit_bomb(w, pos)
+	world_queue_sound(w, .Building_Explode)
+	return true
+}
+
+world_can_use_emp :: proc(w: ^World) -> bool {
+	if w.emp_cooldown > 0 do return false
+	if w.food < EMP_FOOD_COST do return false
+	if w.scrap < EMP_SCRAP_COST do return false
+	return true
+}
+
+world_use_emp :: proc(w: ^World) -> bool {
+	if !world_can_use_emp(w) do return false
+	w.food  -= EMP_FOOD_COST
+	w.scrap -= EMP_SCRAP_COST
+	w.emp_cooldown = EMP_COOLDOWN
+	w.emp_time     = EMP_DURATION
+	world_queue_sound(w, .Turret_Shoot)
+	return true
+}
+
 world_sell :: proc(w: ^World, c: Hex_Coord) -> bool {
 	t, ok := w.tiles[c]
 	if !ok do return false
@@ -234,6 +388,7 @@ tile_max_hp :: proc(kind: Tile_Kind, tier: i32 = 1) -> f32 {
 	case .Core:      base = 200
 	case .Wall:      base = 200
 	case .Turret:    base = 80
+	case .Mortar:    base = 70
 	case .Generator: base = 60
 	case .Wire:      base = 30
 	case .Relay:     base = 50
@@ -255,12 +410,19 @@ tile_max_hp :: proc(kind: Tile_Kind, tier: i32 = 1) -> f32 {
 		case 2: mult = 1.15
 		case 3: mult = 1.30
 		}
-	case .Turret, .Relay:
+	case .Turret, .Relay, .Mortar:
 		switch tier {
 		case 2: mult = 1.20
 		case 3: mult = 1.40
 		}
-	case .Wire, .Core:
+	case .Core:
+		// Core upgrades grant a meaningful HP cushion — investing in tier 2
+		// to unlock the Mortar should also feel like the base got tougher.
+		switch tier {
+		case 2: mult = 1.40
+		case 3: mult = 1.80
+		}
+	case .Wire:
 		// Not upgradeable.
 	}
 	return base * mult
@@ -350,6 +512,12 @@ world_tick :: proc(w: ^World, dt: f32) {
 		if tile.kind == .Farm do food_rate += farm_food_rate(tile.tier)
 	}
 	w.food += food_rate * dt
+	// Bleed ability timers. EMP_time fires once and decays; cooldowns count
+	// down independently so the player sees a "ready" state distinct from
+	// the in-flight stun window.
+	if w.bomb_cooldown > 0 { w.bomb_cooldown -= dt; if w.bomb_cooldown < 0 do w.bomb_cooldown = 0 }
+	if w.emp_cooldown  > 0 { w.emp_cooldown  -= dt; if w.emp_cooldown  < 0 do w.emp_cooldown  = 0 }
+	if w.emp_time      > 0 { w.emp_time      -= dt; if w.emp_time      < 0 do w.emp_time      = 0 }
 	world_recompute_energy(w)
 	if w.path_dirty {
 		build_path_field(w, &w.field_crawler, CRAWLER_WEIGHTS)
@@ -367,6 +535,7 @@ tile_kind_name :: proc(kind: Tile_Kind) -> string {
 	case .Turret:    return "Turret"
 	case .Wall:      return "Wall"
 	case .Relay:     return "Relay"
+	case .Mortar:    return "Mortar"
 	}
 	return "?"
 }
@@ -387,6 +556,10 @@ tile_color :: proc(kind: Tile_Kind) -> (fill, stroke: [4]f32) {
 		return {0.945, 0.937, 0.910, 1}, {0.373, 0.369, 0.353, 1}
 	case .Relay:
 		return {0.882, 0.961, 0.933, 1}, {0.059, 0.431, 0.337, 1}
+	case .Mortar:
+		// Dusky violet — distinct from the warm-red Turret palette so the two
+		// firepower tiles read apart at a glance.
+		return {0.918, 0.886, 0.969, 1}, {0.396, 0.255, 0.612, 1}
 	}
 	return {1, 1, 1, 1}, {0, 0, 0, 1}
 }
@@ -484,6 +657,24 @@ draw_tile_icon :: proc(p: ^Platform, cx, cy: f32, kind: Tile_Kind, alpha: f32, a
 		for i in 0 ..< bot_count {
 			p->draw_rect(x0_bot + f32(i) * pitch, y_bot, cell, cell, stroke)
 		}
+
+	case .Mortar:
+		// Squat barrel angled along `aim_angle` plus a violet base disc. Tier 2
+		// thickens the barrel and tier 3 grows the base to read as "bigger gun".
+		violet := [4]f32{0.55, 0.38, 0.78, alpha}
+		base_r: f32 = 8
+		barrel_t: f32 = 6
+		switch tier {
+		case 2: barrel_t = 7
+		case 3: base_r = 10; barrel_t = 8
+		}
+		p->draw_circle(cx, cy, base_r, violet)
+		barrel_len := f32(13)
+		bx := cx + math.cos(aim_angle) * barrel_len
+		by := cy + math.sin(aim_angle) * barrel_len
+		p->draw_line(cx, cy, bx, by, barrel_t, stroke)
+		// Muzzle cap so the silhouette doesn't fade into a stripe at distance.
+		p->draw_circle(bx, by, barrel_t * 0.55, stroke)
 
 	case .Relay:
 		// Concentric ring at full size (10/7/4); tiers add translated copies.
@@ -628,7 +819,7 @@ world_render_selection_influence :: proc(w: ^World, p: ^Platform, c: Hex_Coord) 
 		radius = relay_build_radius(tile.tier)
 		// Teal, matching the relay stroke palette.
 		color = {0.25, 0.85, 0.70, 0.55}
-	case .Core, .Farm, .Wire, .Turret, .Wall:
+	case .Core, .Farm, .Wire, .Turret, .Wall, .Mortar:
 		return
 	}
 	if radius <= 0 do return

@@ -200,6 +200,12 @@ fx_emit_enemy_death :: proc(w: ^World, pos: [2]f32, kind: Enemy_Kind) {
 		core_color  = {0.78, 1.0, 0.92, 1}
 		chunk_color = {0.114, 0.620, 0.459, 1}
 		count = 12
+	case .Swarmer:
+		// Pink burst — extra debris because it splits into two crawlers and the
+		// chunkier FX sells the "broke apart" beat.
+		core_color  = {1.0, 0.85, 0.95, 1}
+		chunk_color = {0.690, 0.137, 0.557, 1}
+		count = 16
 	}
 	// Central flash.
 	emit(w, Particle{
@@ -225,6 +231,63 @@ fx_emit_enemy_death :: proc(w: ^World, pos: [2]f32, kind: Enemy_Kind) {
 			r1       = 0,
 			color    = chunk_color,
 			drag     = 3.5,
+		})
+	}
+}
+
+// Big bright shockwave for the Core's one-shot bomb. Radius scales the visual
+// so the FX matches the actual damage area the player paid for.
+fx_emit_bomb :: proc(w: ^World, pos: [2]f32) {
+	emit(w, Particle{
+		pos = pos, vel = {0, 0},
+		life = 0.45, max_life = 0.45,
+		r0 = BOMB_RADIUS * 1.1, r1 = 8,
+		color = {1.0, 0.85, 0.55, 1},
+		drag  = 0,
+	})
+	emit(w, Particle{
+		pos = pos, vel = {0, 0},
+		life = 0.30, max_life = 0.30,
+		r0 = BOMB_RADIUS * 0.7, r1 = 4,
+		color = {1.0, 0.50, 0.30, 1},
+		drag  = 0,
+	})
+	for _ in 0 ..< 40 {
+		a := rand.float32_range(0, 2 * math.PI)
+		s := rand.float32_range(120, 420)
+		life := rand.float32_range(0.35, 0.70)
+		emit(w, Particle{
+			pos = pos,
+			vel = {math.cos(a) * s, math.sin(a) * s},
+			life = life, max_life = life,
+			r0 = rand.float32_range(2.5, 4.5), r1 = 0,
+			color = {1.0, 0.62, 0.28, 1},
+			drag  = 3.5,
+		})
+	}
+}
+
+// Smaller flash for mortar shell detonations / splash hits. `r` is the splash
+// radius so a tier-3 mortar visibly flashes wider than a tier-1.
+fx_emit_bomb_small :: proc(w: ^World, pos: [2]f32, r: f32) {
+	emit(w, Particle{
+		pos = pos, vel = {0, 0},
+		life = 0.22, max_life = 0.22,
+		r0 = r * 1.0, r1 = 3,
+		color = {1.0, 0.80, 0.55, 1},
+		drag  = 0,
+	})
+	for _ in 0 ..< 14 {
+		a := rand.float32_range(0, 2 * math.PI)
+		s := rand.float32_range(80, 260)
+		life := rand.float32_range(0.20, 0.40)
+		emit(w, Particle{
+			pos = pos,
+			vel = {math.cos(a) * s, math.sin(a) * s},
+			life = life, max_life = life,
+			r0 = rand.float32_range(1.8, 3.2), r1 = 0,
+			color = {0.98, 0.55, 0.30, 1},
+			drag  = 4,
 		})
 	}
 }

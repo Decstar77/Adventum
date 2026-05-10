@@ -10,6 +10,10 @@ import "core:math"
 Selection_Mode :: enum {
 	Default,
 	Place,
+	// Bomb-targeting cursor — the next world click drops a bomb at the hovered
+	// hex's pixel centre (instead of the usual selection). Cleared by clicking,
+	// escape, RMB, or pressing Q again.
+	Target_Bomb,
 }
 
 Game :: struct {
@@ -52,7 +56,7 @@ Game :: struct {
 }
 
 PANEL_W :: f32(240)
-PANEL_H :: f32(220)
+PANEL_H :: f32(280)
 
 Cost_Sign :: enum { Spend, Gain }
 
@@ -103,12 +107,62 @@ button_with_food_cost :: proc(ui: ^UI, p: ^Platform, label: string, amount: i32,
 	return clicked
 }
 
+// Same shape as button_with_food_cost but renders the cost in scrap. Repair is
+// the only scrap-spend button on the selection panel right now, but the helper
+// is generic so it can host future scrap-priced actions without copy/paste.
+button_with_scrap_cost :: proc(ui: ^UI, p: ^Platform, label: string, amount: i32, x, y, w, h: f32, disabled: bool = false) -> bool {
+	hover := !disabled && point_in_rect(p.mouse, x, y, w, h)
+	held  := hover && p.mouse_left_down
+	ui_track_hover(ui, p, hover, ui_button_key(x, y))
+
+	BASE  := [4]f32{0.18, 0.20, 0.26, 1.0}
+	HOVER := [4]f32{0.26, 0.30, 0.40, 1.0}
+	HELD  := [4]f32{0.10, 0.12, 0.16, 1.0}
+
+	bg := BASE
+	if held       do bg = HELD
+	else if hover do bg = HOVER
+
+	p->draw_rect(x, y, w, h, bg)
+	p->draw_line(x, y,     x + w, y,     1, {1, 1, 1, 0.15})
+	p->draw_line(x, y + h, x + w, y + h, 1, {0, 0, 0, 0.40})
+
+	num_str := fmt.tprintf("-%d", amount)
+	gap_label_num := f32(12)
+	gap_num_icon  := f32(4)
+	icon_s        := f32(16)
+
+	label_w := p->text_measure(label,   .Small)
+	num_w   := p->text_measure(num_str, .Small)
+	total_w := label_w + gap_label_num + num_w + gap_num_icon + icon_s
+
+	cx0 := x + (w - total_w) * 0.5
+	font_small := p->font_size_px(.Small)
+	ty := y + h * 0.5 + font_small * 0.3
+
+	label_tint := disabled ? [4]f32{0.7, 0.7, 0.75, 1} : [4]f32{1, 1, 1, 1}
+	num_tint   := disabled ? [4]f32{0.9, 0.6, 0.6, 1}  : [4]f32{0.78, 0.86, 1.00, 1}
+	p->draw_text(cx0,                                        ty, label,   label_tint, .Small)
+	p->draw_text(cx0 + label_w + gap_label_num,              ty, num_str, num_tint,   .Small)
+	icon_x := cx0 + label_w + gap_label_num + num_w + gap_num_icon
+	icon_y := y + (h - icon_s) * 0.5
+	draw_scrap_icon(p, icon_x, icon_y, icon_s)
+
+	if disabled {
+		p->draw_rect(x, y, w, h, {0, 0, 0, 0.40})
+	}
+
+	clicked := hover && p.mouse_left_pressed
+	if clicked do p->play_sound(.Button_Click)
+	return clicked
+}
+
 TICK_HZ :: 10.0
 TICK_DT :: f32(1.0 / TICK_HZ)
 
 @(private="file")
 HOTKEYS := [BUILDABLE_COUNT]Key{
-	.Num1, .Num2, .Num3, .Num4, .Num5, .Num6,
+	.Num1, .Num2, .Num3, .Num4, .Num5, .Num6, .Num7,
 }
 
 game_init :: proc(g: ^Game) {
@@ -185,7 +239,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		switch {
 		case g.paused:
 			g.paused = false
-		case g.mode == .Place || g.has_selection:
+		case g.mode == .Place || g.mode == .Target_Bomb || g.has_selection:
 			g.mode = .Default
 			g.has_selection = false
 		case:
@@ -256,6 +310,20 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		if p->is_key_just_pressed(.C) do enemy_spawn(&g.world, .Crawler)
 		if p->is_key_just_pressed(.B) do enemy_spawn(&g.world, .Brute)
 		if p->is_key_just_pressed(.V) do enemy_spawn(&g.world, .Spitter)
+		if p->is_key_just_pressed(.N) do enemy_spawn(&g.world, .Swarmer)
+
+		// Ability hotkeys. Q enters bomb-target mode (acts like Place but for
+		// a one-shot AoE); E fires the EMP instantly. Both gate on the
+		// affordability checks inside their `world_use_*` procs.
+		if p->is_key_just_pressed(.Q) && world_can_use_bomb(&g.world) {
+			g.mode = .Target_Bomb
+			g.has_selection = false
+		}
+		if p->is_key_just_pressed(.E) {
+			if world_use_emp(&g.world) {
+				p->play_sound(.Button_Click)
+			}
+		}
 		// F6: skip the surge cooldown and fire the next wave on this frame.
 		if p->is_key_just_pressed(.F6) do waves_force_next_surge(&g.world.waves)
 
@@ -285,6 +353,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 
 		waves_update(&g.world, &g.world.waves, dt)
 		turrets_fire(&g.world, dt)
+		mortars_fire(&g.world, dt)
 		projectiles_update(&g.world, dt)
 		enemies_update(&g.world, dt)
 		sweep_dead_enemies(&g.world)
@@ -335,6 +404,33 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		p->play_sound(.Button_Click)
 	}
 
+	// Core ability buttons live directly under the gear: [Bomb (Q)] [EMP (E)].
+	// Wider than the gear so the cost lines and cooldown text fit; placed
+	// before the world hit-tests so clicks on them don't fall through to the
+	// hex grid underneath.
+	ABIL_W :: f32(112)
+	ABIL_H :: f32(40)
+	ABIL_GAP :: f32(6)
+	bomb_x := sw - 12 - ABIL_W
+	bomb_y := gear_y + GEAR_S + 10
+	emp_x  := bomb_x
+	emp_y  := bomb_y + ABIL_H + ABIL_GAP
+	mouse_in_bomb := point_in_rect(p.mouse, bomb_x, bomb_y, ABIL_W, ABIL_H)
+	mouse_in_emp  := point_in_rect(p.mouse, emp_x,  emp_y,  ABIL_W, ABIL_H)
+	mouse_in_abilities := mouse_in_bomb || mouse_in_emp
+	ui_track_hover(&g.ui, p, mouse_in_bomb, ui_button_key(bomb_x, bomb_y))
+	ui_track_hover(&g.ui, p, mouse_in_emp,  ui_button_key(emp_x,  emp_y))
+	if !paused && !g.world.game_over {
+		if mouse_in_bomb && p.mouse_left_pressed && world_can_use_bomb(&g.world) {
+			g.mode = .Target_Bomb
+			g.has_selection = false
+			p->play_sound(.Button_Click)
+		}
+		if mouse_in_emp && p.mouse_left_pressed {
+			if world_use_emp(&g.world) do p->play_sound(.Button_Click)
+		}
+	}
+
 	// Hex under cursor
 	mouse_world := camera_screen_to_world(&g.cam, p.mouse, sw, sh)
 	hover := pixel_to_hex(mouse_world)
@@ -368,8 +464,15 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	// Place / remove via mouse on the world (suppressed when over the picker bar)
 	lmb_just := p.mouse_left_pressed
 	shift_held := p->is_key_down(.Left_Shift) || p->is_key_down(.Right_Shift)
-	if !paused && !mouse_in_picker && !mouse_in_panel && !mouse_in_gear && !g.world.game_over {
-		if lmb_just && g.mode == .Place {
+	if !paused && !mouse_in_picker && !mouse_in_panel && !mouse_in_gear && !mouse_in_abilities && !g.world.game_over {
+		if lmb_just && g.mode == .Target_Bomb {
+			// Drop the bomb at the hovered hex's pixel centre so the AoE
+			// reads as anchored to a tile rather than a cursor pixel.
+			tgt := hex_to_pixel(hover)
+			if world_use_bomb(&g.world, tgt) {
+				g.mode = .Default
+			}
+		} else if lmb_just && g.mode == .Place {
 			if world_place(&g.world, hover, g.selected_kind) {
 				if !shift_held do g.mode = .Default
 			}
@@ -382,9 +485,10 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 			}
 		}
 		if rmb_clicked {
-			if g.mode == .Place {
+			switch g.mode {
+			case .Place, .Target_Bomb:
 				g.mode = .Default
-			} else {
+			case .Default:
 				world_remove(&g.world, hover)
 			}
 		}
@@ -426,7 +530,27 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	if !g.world.game_over {
 		world_render_hover(&g.world, p, hover, g.hover_smoothed, g.mode == .Place, g.selected_kind)
 
-		if g.mode == .Default && !mouse_in_picker && !mouse_in_panel && !mouse_in_gear && !paused {
+		// Bomb-target preview: orange ring at exactly the damage radius so the
+		// player knows what they're about to vaporise.
+		if g.mode == .Target_Bomb {
+			tgt := hex_to_pixel(hover)
+			ring := [4]f32{1.0, 0.55, 0.20, 0.85}
+			p->draw_circle(tgt.x, tgt.y, BOMB_RADIUS,        {1.0, 0.55, 0.20, 0.18})
+			draw_hex_outline_at(p, tgt, 2.5, ring)
+			// Coarse ring approximation using line segments.
+			SEG :: 36
+			prev_x := tgt.x + BOMB_RADIUS
+			prev_y := tgt.y
+			for i in 1 ..= SEG {
+				a := f32(i) * (2 * math.PI / SEG)
+				nx := tgt.x + math.cos(a) * BOMB_RADIUS
+				ny := tgt.y + math.sin(a) * BOMB_RADIUS
+				p->draw_line(prev_x, prev_y, nx, ny, 2, ring)
+				prev_x, prev_y = nx, ny
+			}
+		}
+
+		if g.mode == .Default && !mouse_in_picker && !mouse_in_panel && !mouse_in_gear && !mouse_in_abilities && !paused {
 			if _, ok := g.world.tiles[hover]; ok {
 				draw_hex_outline(p, hover, 2.5, {1, 1, 1, 0.9})
 			}
@@ -450,12 +574,18 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	by := picker_y + picker_pad
 	bw := f32(132)
 	bh := picker_h - picker_pad * 2
+	mortar_locked := !mortar_unlocked(&g.world)
 	for i in 0 ..< BUILDABLE_COUNT {
 		kind := Tile_Kind(i)
 		cost := tile_cost(kind)
 		x := bx + f32(i) * (bw + 8)
 		affordable := g.world.food >= cost
-		if ui_button(&g.ui, p, "", x, by, bw, bh) {
+		// Mortar reads as locked until the Core hits the required tier — clicks
+		// are silently consumed so the player can't enter Place mode and stare
+		// at red placement outlines wondering why nothing drops.
+		locked := kind == .Mortar && mortar_locked
+		clicked := ui_button(&g.ui, p, "", x, by, bw, bh)
+		if clicked && !locked {
 			g.selected_kind = kind
 			g.mode = .Place
 			g.has_selection = false
@@ -474,8 +604,15 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		icon_s := f32(16)
 		draw_food_icon(p, text_x - icon_s - 4, by + (bh - icon_s) * 0.5, icon_s)
 
-		if !affordable {
+		if !affordable || locked {
 			p->draw_rect(x, by, bw, bh, {0, 0, 0, 0.45})
+		}
+		if locked {
+			// Tag the slot with the unlock requirement so the lockout reads
+			// as a tier gate rather than just "you're broke".
+			tag := fmt.tprintf("Core T%d", MORTAR_CORE_TIER_REQ)
+			tw_tag := p->text_measure(tag, .Small)
+			p->draw_text(x + (bw - tw_tag) * 0.5, by + 14, tag, {0.95, 0.85, 0.55, 1}, .Small)
 		}
 		if g.mode == .Place && kind == g.selected_kind {
 			_, stroke := tile_color(kind)
@@ -510,15 +647,16 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	// Per-kind tally so a "huge" total can be read at a glance — useful for
 	// spotting trickle pile-up vs. a fresh surge. Hotkeys live on the same row
 	// since they're a debug spawn aid that pairs with the same vocabulary.
-	enemy_crawlers, enemy_brutes, enemy_spitters: i32
+	enemy_crawlers, enemy_brutes, enemy_spitters, enemy_swarmers: i32
 	for e in g.world.enemies {
 		switch e.kind {
 		case .Crawler: enemy_crawlers += 1
 		case .Brute:   enemy_brutes   += 1
 		case .Spitter: enemy_spitters += 1
+		case .Swarmer: enemy_swarmers += 1
 		}
 	}
-	p->draw_text(hud_text_x, y4, fmt.tprintf("%d  (C %d  B %d  V %d)", len(g.world.enemies), enemy_crawlers, enemy_brutes, enemy_spitters), {0.96, 0.78, 0.78, 1}, .Small)
+	p->draw_text(hud_text_x, y4, fmt.tprintf("%d  (C %d  B %d  V %d  N %d)", len(g.world.enemies), enemy_crawlers, enemy_brutes, enemy_spitters, enemy_swarmers), {0.96, 0.78, 0.78, 1}, .Small)
 
 	// Big timer at top-center.
 	timer_str := fmt.tprintf("%.1fs", g.world.survive_time)
@@ -594,16 +732,30 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		btn_w := PANEL_W - 32
 		btn_h := f32(36)
 		btn_x := panel_x + 16
-		sell_y := panel_y + PANEL_H - 16 - btn_h * 2 - 8
+		// Stack from the bottom: Upgrade (bottom-most for upgradeable tiles),
+		// Sell above it, Repair above Sell. Non-upgradeable tiles collapse the
+		// upgrade slot so Repair/Sell pack flush.
 		upgrade_y := panel_y + PANEL_H - 16 - btn_h
+		sell_y    := upgrade_y - btn_h - 8
+		repair_y  := sell_y    - btn_h - 8
 
 		can_sell := tile.kind != .Core
 		refund := i32(cost * 0.5)
 
-		// Wire/Core have no upgrade path — collapse the layout so Sell takes
-		// the bottom slot rather than leaving an empty button hovering.
 		if !tile_is_upgradeable(tile.kind) {
-			sell_y = upgrade_y
+			sell_y    = upgrade_y
+			repair_y  = sell_y - btn_h - 8
+		}
+
+		// Repair: spend scrap to top this tile back up to full HP. Disabled
+		// when at max-HP or short on scrap.
+		_, repair_cost, repairable := tile_repair_quote(&g.world, g.selected_tile)
+		can_repair := repairable && g.world.scrap >= repair_cost
+		label := repairable ? "Repair" : "Repair  (full)"
+		if button_with_scrap_cost(&g.ui, p, label, repair_cost, btn_x, repair_y, btn_w, btn_h, !can_repair) {
+			if can_repair {
+				world_repair(&g.world, g.selected_tile)
+			}
 		}
 
 		// Sell button: "Sell  +N <food icon>" (or "Sell  (locked)" for Core).
@@ -650,6 +802,75 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		p->draw_text((sw - hw) * 0.5, cy - 28, head, {1.00, 0.82, 0.82, 1}, .Large)
 		p->draw_text((sw - bw) * 0.5, cy + 24, body, {0.96, 0.96, 0.96, 1},  .Small)
 		p->draw_text((sw - tw) * 0.5, cy + 56, tip,  {0.78, 0.86, 1.00, 1},  .Small)
+	}
+
+	// Ability buttons. Drawn here so they sit above the HUD and selection
+	// panel. Each shows label, hotkey, the dual food/scrap cost on one line,
+	// and — while on cooldown — a translucent overlay with the seconds left.
+	{
+		draw_ability :: proc(p: ^Platform, label, hotkey: string, x, y, w, h: f32,
+			ready, hover, held: bool, cooldown: f32,
+			food_cost: i32, scrap_cost: i32) {
+			BASE  := [4]f32{0.18, 0.20, 0.26, 0.92}
+			HOVER := [4]f32{0.26, 0.30, 0.40, 0.95}
+			HELD  := [4]f32{0.10, 0.12, 0.16, 0.95}
+			bg := BASE
+			if ready {
+				if held       do bg = HELD
+				else if hover do bg = HOVER
+			}
+			p->draw_rect(x, y, w, h, bg)
+			p->draw_line(x, y,     x + w, y,     1, {1, 1, 1, 0.15})
+			p->draw_line(x, y + h, x + w, y + h, 1, {0, 0, 0, 0.40})
+
+			font_small := p->font_size_px(.Small)
+			// Top line: "<label>  [<hotkey>]"
+			head := fmt.tprintf("%s  [%s]", label, hotkey)
+			hw := p->text_measure(head, .Small)
+			p->draw_text(x + (w - hw) * 0.5, y + 4 + font_small, head, {0.95, 0.95, 0.98, 1}, .Small)
+
+			// Bottom line: cost cluster "Nfood Mscrap" centred.
+			icon_s := f32(12)
+			food_str  := fmt.tprintf("%d", food_cost)
+			scrap_str := fmt.tprintf("%d", scrap_cost)
+			fw := p->text_measure(food_str,  .Small)
+			sw := p->text_measure(scrap_str, .Small)
+			gap := f32(4)
+			cluster_w := icon_s + gap + fw + 10 + icon_s + gap + sw
+			cx0 := x + (w - cluster_w) * 0.5
+			cy0 := y + h - 4 - font_small * 0.2
+			icon_y := y + h - 6 - icon_s
+			draw_food_icon(p, cx0, icon_y, icon_s)
+			p->draw_text(cx0 + icon_s + gap, cy0, food_str, {0.92, 0.98, 0.78, 1}, .Small)
+			sx0 := cx0 + icon_s + gap + fw + 10
+			draw_scrap_icon(p, sx0, icon_y, icon_s)
+			p->draw_text(sx0 + icon_s + gap, cy0, scrap_str, {0.78, 0.86, 1.00, 1}, .Small)
+
+			if !ready {
+				p->draw_rect(x, y, w, h, {0, 0, 0, 0.55})
+				cd_str := fmt.tprintf("%.0fs", cooldown)
+				cw := p->text_measure(cd_str, .Large)
+				p->draw_text(x + (w - cw) * 0.5, y + h * 0.5 + p->font_size_px(.Large) * 0.35, cd_str, {1, 0.85, 0.60, 1}, .Large)
+			}
+		}
+		bomb_ready := world_can_use_bomb(&g.world)
+		emp_ready  := world_can_use_emp(&g.world)
+		draw_ability(p, "Bomb", "Q", bomb_x, bomb_y, ABIL_W, ABIL_H,
+			bomb_ready, mouse_in_bomb, mouse_in_bomb && p.mouse_left_down,
+			g.world.bomb_cooldown, i32(BOMB_FOOD_COST), BOMB_SCRAP_COST)
+		draw_ability(p, "EMP",  "E", emp_x,  emp_y,  ABIL_W, ABIL_H,
+			emp_ready, mouse_in_emp, mouse_in_emp && p.mouse_left_down,
+			g.world.emp_cooldown,  i32(EMP_FOOD_COST),  EMP_SCRAP_COST)
+		// While the EMP is freezing the field, paint a faint cyan vignette over
+		// the screen as feedback that the world is paused for enemies.
+		if g.world.emp_time > 0 {
+			a := g.world.emp_time / EMP_DURATION
+			if a > 1 do a = 1
+			p->draw_rect(0, 0, sw, sh, {0.40, 0.85, 1.00, 0.10 * a})
+			label := fmt.tprintf("EMP  %.1fs", g.world.emp_time)
+			lw := p->text_measure(label, .Small)
+			p->draw_text((sw - lw) * 0.5, 90, label, {0.55, 0.95, 1.00, 1}, .Small)
+		}
 	}
 
 	// Gear button (top-right). Drawn after everything else so it sits above the

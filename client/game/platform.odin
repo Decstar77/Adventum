@@ -31,8 +31,8 @@ Sound :: enum {
 Key :: enum {
 	Unknown,
 	W, A, S, D,
-	C, B, R, V,
-	Num1, Num2, Num3, Num4, Num5, Num6,
+	C, B, R, V, N, Q, E,
+	Num1, Num2, Num3, Num4, Num5, Num6, Num7,
 	Escape,
 	Enter,
 	Space,

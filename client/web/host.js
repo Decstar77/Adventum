@@ -351,15 +351,15 @@ const host = {
 };
 
 // --- Input mapping. Indices must match the Key enum in client/game/platform.odin.
-// 0=Unknown, then W,A,S,D, C,B,R,V, Num1..Num6, Escape, Enter, Space,
+// 0=Unknown, then W,A,S,D, C,B,R,V,N,Q,E, Num1..Num7, Escape, Enter, Space,
 // Left_Shift, Right_Shift, F6. If you reorder the Odin enum, update this table.
 const KEY = {
 	KeyW: 1, KeyA: 2, KeyS: 3, KeyD: 4,
-	KeyC: 5, KeyB: 6, KeyR: 7, KeyV: 8,
-	Digit1: 9, Digit2: 10, Digit3: 11, Digit4: 12, Digit5: 13, Digit6: 14,
-	Escape: 15, Enter: 16, Space: 17,
-	ShiftLeft: 18, ShiftRight: 19,
-	F6: 20,
+	KeyC: 5, KeyB: 6, KeyR: 7, KeyV: 8, KeyN: 9, KeyQ: 10, KeyE: 11,
+	Digit1: 12, Digit2: 13, Digit3: 14, Digit4: 15, Digit5: 16, Digit6: 17, Digit7: 18,
+	Escape: 19, Enter: 20, Space: 21,
+	ShiftLeft: 22, ShiftRight: 23,
+	F6: 24,
 };
 
 // Odin's `js_wasm32` runtime links the C99 libm trig/exp/log/round helpers as

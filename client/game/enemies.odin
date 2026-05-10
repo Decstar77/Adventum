@@ -10,7 +10,12 @@ Enemy_Kind :: enum {
 	Crawler,
 	Brute,
 	Spitter,
+	Swarmer,
 }
+
+// On death, a Swarmer splits into this many baby Crawlers spawned at its
+// position. Keeps the on-death surge readable without ballooning enemy counts.
+SWARMER_SPLIT_COUNT :: 2
 
 Enemy :: struct {
 	kind: Enemy_Kind,
@@ -32,6 +37,7 @@ enemy_stats :: proc(kind: Enemy_Kind) -> (hp, speed, dmg: f32) {
 	case .Crawler: return 20, 80, 10
 	case .Brute:   return 100, 35, 30
 	case .Spitter: return 30, 55, 14
+	case .Swarmer: return 35, 65, 8
 	}
 	return 0, 0, 0
 }
@@ -40,8 +46,8 @@ enemy_stats :: proc(kind: Enemy_Kind) -> (hp, speed, dmg: f32) {
 // Contact-melee kinds return 0; ranged kinds stand off and chip from there.
 enemy_attack_range :: proc(kind: Enemy_Kind) -> f32 {
 	switch kind {
-	case .Crawler, .Brute: return 0
-	case .Spitter:         return 70
+	case .Crawler, .Brute, .Swarmer: return 0
+	case .Spitter:                   return 70
 	}
 	return 0
 }
@@ -51,6 +57,7 @@ enemy_kind_name :: proc(kind: Enemy_Kind) -> string {
 	case .Crawler: return "Crawler"
 	case .Brute:   return "Brute"
 	case .Spitter: return "Spitter"
+	case .Swarmer: return "Swarmer"
 	}
 	return "?"
 }
@@ -128,8 +135,8 @@ build_path_field :: proc(w: ^World, field: ^Path_Field, weights: Pathing_Weights
 
 enemy_field_for :: proc(w: ^World, kind: Enemy_Kind) -> ^Path_Field {
 	switch kind {
-	case .Crawler, .Spitter: return &w.field_crawler
-	case .Brute:             return &w.field_brute
+	case .Crawler, .Spitter, .Swarmer: return &w.field_crawler
+	case .Brute:                       return &w.field_brute
 	}
 	return &w.field_crawler
 }
@@ -169,6 +176,10 @@ nearest_tile_to :: proc(w: ^World, from: [2]f32) -> (Hex_Coord, bool) {
 // in place. Per-enemy nuance (Brutes preferring walls, Crawlers routing around)
 // will return later via the path-field code retained above.
 enemies_update :: proc(w: ^World, dt: f32) {
+	// EMP completely freezes the field: enemies don't shuffle, don't gnaw on
+	// tiles, and don't drop sparks. Cooldown bleed-down is handled in
+	// `world_tick`. The render pass still draws them, just statue-still.
+	if w.emp_time > 0 do return
 	for i in 0 ..< len(w.enemies) {
 		e := &w.enemies[i]
 		_, speed, dmg := enemy_stats(e.kind)
@@ -257,6 +268,17 @@ enemies_render :: proc(w: ^World, p: ^Platform) {
 			// red Crawler so the short-range threat reads at a glance.
 			p->draw_circle(e.pos.x, e.pos.y, 9, {0.882, 0.961, 0.933, 1})
 			p->draw_circle(e.pos.x, e.pos.y, 5, {0.114, 0.620, 0.459, 1})
+			draw_health_bar(p, e.pos.x, e.pos.y - 16, 22, e.hp, max_hp)
+		case .Swarmer:
+			// Magenta cluster — three small lobes around a darker core to
+			// telegraph "this thing breaks apart on death". Tiny offsets keep
+			// the silhouette legible at the same eye scale as a Crawler.
+			lobe  := [4]f32{0.992, 0.776, 0.953, 1}
+			core  := [4]f32{0.690, 0.137, 0.557, 1}
+			p->draw_circle(e.pos.x - 5, e.pos.y - 3, 5, lobe)
+			p->draw_circle(e.pos.x + 5, e.pos.y - 3, 5, lobe)
+			p->draw_circle(e.pos.x,     e.pos.y + 4, 5, lobe)
+			p->draw_circle(e.pos.x,     e.pos.y,     4, core)
 			draw_health_bar(p, e.pos.x, e.pos.y - 16, 22, e.hp, max_hp)
 		}
 	}

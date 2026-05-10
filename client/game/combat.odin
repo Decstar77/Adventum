@@ -31,10 +31,14 @@ shortest_angle_diff :: proc(a, b: f32) -> f32 {
 }
 
 Projectile :: struct {
-	pos:  [2]f32,
-	vel:  [2]f32,
-	dmg:  f32,
-	life: f32,
+	pos:    [2]f32,
+	vel:    [2]f32,
+	dmg:    f32,
+	life:   f32,
+	// Splash radius in world units. 0 → single-target turret bullet; >0 → on
+	// impact (or life expiry) we damage every enemy within `splash` and emit
+	// a bigger FX flash. Mortars set this when they fire.
+	splash: f32,
 }
 
 scrap_for_kind :: proc(kind: Enemy_Kind) -> i32 {
@@ -42,6 +46,7 @@ scrap_for_kind :: proc(kind: Enemy_Kind) -> i32 {
 	case .Crawler: return 1
 	case .Brute:   return 4
 	case .Spitter: return 2
+	case .Swarmer: return 3
 	}
 	return 0
 }
@@ -139,9 +144,24 @@ projectiles_update :: proc(w: ^World, dt: f32) {
 			}
 		}
 
-		if hit {
+		// On contact (or end-of-life for a mortar, so a near-miss still
+		// detonates), apply splash to all enemies in radius and emit a bigger
+		// flash. The direct-hit target ate the full hit above; splash adds
+		// half-damage to neighbours.
+		expired := !hit && p.life <= 0
+		if (hit || expired) && p.splash > 0 {
+			r2 := p.splash * p.splash
+			for j in 0 ..< len(w.enemies) {
+				e := &w.enemies[j]
+				dx := e.pos.x - p.pos.x
+				dy := e.pos.y - p.pos.y
+				if dx*dx + dy*dy <= r2 do e.hp -= p.dmg * 0.5
+			}
+			fx_emit_bomb_small(w, p.pos, p.splash)
+		} else if hit {
 			fx_emit_impact(w, p.pos, p.vel)
 		}
+
 		if hit || p.life <= 0 {
 			unordered_remove(&w.projectiles, i)
 		}
@@ -151,11 +171,87 @@ projectiles_update :: proc(w: ^World, dt: f32) {
 sweep_dead_enemies :: proc(w: ^World) {
 	for i := len(w.enemies) - 1; i >= 0; i -= 1 {
 		if w.enemies[i].hp <= 0 {
-			fx_emit_enemy_death(w, w.enemies[i].pos, w.enemies[i].kind)
-			w.scrap += scrap_for_kind(w.enemies[i].kind)
+			dead := w.enemies[i]
+			fx_emit_enemy_death(w, dead.pos, dead.kind)
+			w.scrap += scrap_for_kind(dead.kind)
 			world_queue_sound(w, .Enemy_Die)
 			unordered_remove(&w.enemies, i)
+			// Swarmer split: drop SWARMER_SPLIT_COUNT crawlers at the exact
+			// death position so the player sees the "burst". Spawned after
+			// the removal so the new entries don't get re-walked this frame.
+			if dead.kind == .Swarmer {
+				chp, _, _ := enemy_stats(.Crawler)
+				for _ in 0 ..< SWARMER_SPLIT_COUNT {
+					append(&w.enemies, Enemy{kind = .Crawler, pos = dead.pos, hp = chp})
+				}
+			}
 		}
+	}
+}
+
+// Mortars are slower long-range siege guns: bigger range, slower fire, splash
+// damage. Same aim/cooldown structure as turrets, but they fire a single AoE
+// shell rather than per-tier double barrels.
+mortars_fire :: proc(w: ^World, dt: f32) {
+	for coord, tile in w.tiles {
+		if tile.kind != .Mortar do continue
+		t := tile
+
+		origin := hex_to_pixel(coord)
+		idx := nearest_enemy_in_range(w, origin, MORTAR_RANGE_PIXELS)
+
+		target_angle := t.aim_angle
+		has_target := idx >= 0
+		if has_target {
+			tp := w.enemies[idx].pos
+			target_angle = math.atan2(tp.y - origin.y, tp.x - origin.x)
+		}
+		// Reuse the same angle-approach helper turrets use — duplicated locally
+		// because it's marked file-private up top. Inline copy keeps the file
+		// boundary intact without forcing a wider symbol.
+		approach :: proc(current, target, max_step: f32) -> f32 {
+			diff := target - current
+			for diff >  math.PI do diff -= 2 * math.PI
+			for diff < -math.PI do diff += 2 * math.PI
+			if diff >  max_step do diff =  max_step
+			if diff < -max_step do diff = -max_step
+			return current + diff
+		}
+		short_diff :: proc(a, b: f32) -> f32 {
+			d := b - a
+			for d >  math.PI do d -= 2 * math.PI
+			for d < -math.PI do d += 2 * math.PI
+			return d
+		}
+		t.aim_angle = approach(t.aim_angle, target_angle, MORTAR_ROT_SPEED * dt)
+		if t.cooldown > 0 {
+			t.cooldown -= dt
+			if t.cooldown < 0 do t.cooldown = 0
+		}
+
+		if t.energized && t.cooldown <= 0 && has_target {
+			if abs(short_diff(t.aim_angle, target_angle)) <= MORTAR_AIM_TOLERANCE {
+				dmg    := mortar_damage(t.tier)
+				splash := mortar_splash(t.tier)
+				dx := math.cos(t.aim_angle)
+				dy := math.sin(t.aim_angle)
+				muzzle := [2]f32{
+					origin.x + dx * TURRET_MUZZLE_OFFSET,
+					origin.y + dy * TURRET_MUZZLE_OFFSET,
+				}
+				append(&w.projectiles, Projectile{
+					pos    = muzzle,
+					vel    = {dx * MORTAR_PROJ_SPEED, dy * MORTAR_PROJ_SPEED},
+					dmg    = dmg,
+					life   = MORTAR_PROJ_LIFE,
+					splash = splash,
+				})
+				fx_emit_muzzle(w, muzzle, t.aim_angle)
+				t.cooldown = MORTAR_FIRE_INTERVAL
+				world_queue_sound(w, .Turret_Shoot)
+			}
+		}
+		w.tiles[coord] = t
 	}
 }
 
