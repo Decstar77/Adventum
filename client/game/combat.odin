@@ -1,6 +1,7 @@
 package game
 
 import "core:math"
+import "core:math/rand"
 
 TURRET_RANGE_PIXELS  :: f32(280)
 TURRET_FIRE_INTERVAL :: f32(0.9)
@@ -176,13 +177,23 @@ sweep_dead_enemies :: proc(w: ^World) {
 			w.scrap += scrap_for_kind(dead.kind)
 			world_queue_sound(w, .Enemy_Die)
 			unordered_remove(&w.enemies, i)
-			// Swarmer split: drop SWARMER_SPLIT_COUNT crawlers at the exact
-			// death position so the player sees the "burst". Spawned after
-			// the removal so the new entries don't get re-walked this frame.
+			// Swarmer split: paint the shockwave first, then drop crawlers
+			// radially around the death position so they don't stack into a
+			// single visual blob. The base angle is jittered each death so
+			// repeated swarmer deaths don't all line up the same way.
 			if dead.kind == .Swarmer {
+				fx_emit_swarmer_shock(w, dead.pos)
 				chp, _, _ := enemy_stats(.Crawler)
-				for _ in 0 ..< SWARMER_SPLIT_COUNT {
-					append(&w.enemies, Enemy{kind = .Crawler, pos = dead.pos, hp = chp})
+				base_angle := rand.float32_range(0, 2 * math.PI)
+				step := f32(2 * math.PI) / f32(SWARMER_SPLIT_COUNT)
+				SPREAD :: f32(26)
+				for k in 0 ..< SWARMER_SPLIT_COUNT {
+					a := base_angle + step * f32(k)
+					pos := [2]f32{
+						dead.pos.x + math.cos(a) * SPREAD,
+						dead.pos.y + math.sin(a) * SPREAD,
+					}
+					append(&w.enemies, Enemy{kind = .Crawler, pos = pos, hp = chp})
 				}
 			}
 		}

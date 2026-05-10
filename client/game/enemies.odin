@@ -18,9 +18,30 @@ Enemy_Kind :: enum {
 SWARMER_SPLIT_COUNT :: 2
 
 Enemy :: struct {
-	kind: Enemy_Kind,
-	pos:  [2]f32,
-	hp:   f32,
+	kind:        Enemy_Kind,
+	pos:         [2]f32,
+	hp:          f32,
+	// Per-enemy attack pacing. Only Spitter currently uses this (it sits at
+	// standoff range and lobs a projectile every `SPITTER_FIRE_INTERVAL`
+	// seconds). Melee kinds leave it at zero — their damage is applied
+	// continuously in `enemies_update`.
+	attack_cd:   f32,
+}
+
+// Spitter projectile tuning. Slower than turret bullets so the player can
+// react; same hit feel via the existing fx_emit_impact-style flash, but the
+// damage goes to the targeted tile rather than to a player projectile.
+SPITTER_FIRE_INTERVAL :: f32(1.4)
+SPITTER_PROJ_SPEED    :: f32(280)
+SPITTER_PROJ_LIFE     :: f32(2.2)
+SPITTER_PROJ_HIT_R    :: f32(10)
+
+Enemy_Projectile :: struct {
+	pos:    [2]f32,
+	vel:    [2]f32,
+	dmg:    f32,
+	life:   f32,
+	target: Hex_Coord,
 }
 
 Pathing_Weights :: struct {
@@ -184,6 +205,14 @@ enemies_update :: proc(w: ^World, dt: f32) {
 		e := &w.enemies[i]
 		_, speed, dmg := enemy_stats(e.kind)
 
+		// All enemies bleed their attack cooldown regardless of whether they
+		// have a target — keeps newly-arriving Spitters from getting a free
+		// instant first-shot.
+		if e.attack_cd > 0 {
+			e.attack_cd -= dt
+			if e.attack_cd < 0 do e.attack_cd = 0
+		}
+
 		target, ok := nearest_tile_to(w, e.pos)
 		if !ok do continue
 		center := hex_to_pixel(target)
@@ -199,26 +228,44 @@ enemies_update :: proc(w: ^World, dt: f32) {
 		if d <= stop_dist {
 			tile, present := w.tiles[target]
 			if present {
-				tile.hp -= dmg * dt
-				// Spark at the contact point on the hex boundary, biased
-				// away from the tile center toward the enemy.
-				dir := [2]f32{dx / max(d, 0.001), dy / max(d, 0.001)}
-				contact := [2]f32{
-					center.x - dir.x * boundary,
-					center.y - dir.y * boundary,
-				}
-				// Probabilistic emission — averages a few sparks per second
-				// per attacking enemy so dense swarms don't drown the screen.
-				if rand.float32() < dt * 6 {
-					fx_emit_enemy_attack(w, contact, dir)
-					world_queue_sound(w, .Enemy_Attack)
-				}
-				if tile.hp <= 0 && tile.kind != .Core {
-					fx_emit_tile_destroyed(w, center, tile.kind)
-					world_queue_sound(w, .Building_Explode)
-					world_remove(w, target)
+				// Spitter sits at standoff range and lobs projectiles on a
+				// timer; melee kinds chip continuously like before.
+				if e.kind == .Spitter {
+					if e.attack_cd <= 0 {
+						dir := [2]f32{dx / max(d, 0.001), dy / max(d, 0.001)}
+						muzzle := [2]f32{e.pos.x + dir.x * 10, e.pos.y + dir.y * 10}
+						append(&w.enemy_projectiles, Enemy_Projectile{
+							pos    = muzzle,
+							vel    = {dir.x * SPITTER_PROJ_SPEED, dir.y * SPITTER_PROJ_SPEED},
+							dmg    = dmg,
+							life   = SPITTER_PROJ_LIFE,
+							target = target,
+						})
+						world_queue_sound(w, .Enemy_Attack)
+						e.attack_cd = SPITTER_FIRE_INTERVAL
+					}
 				} else {
-					w.tiles[target] = tile
+					tile.hp -= dmg * dt
+					// Spark at the contact point on the hex boundary, biased
+					// away from the tile center toward the enemy.
+					dir := [2]f32{dx / max(d, 0.001), dy / max(d, 0.001)}
+					contact := [2]f32{
+						center.x - dir.x * boundary,
+						center.y - dir.y * boundary,
+					}
+					// Probabilistic emission — averages a few sparks per second
+					// per attacking enemy so dense swarms don't drown the screen.
+					if rand.float32() < dt * 6 {
+						fx_emit_enemy_attack(w, contact, dir)
+						world_queue_sound(w, .Enemy_Attack)
+					}
+					if tile.hp <= 0 && tile.kind != .Core {
+						fx_emit_tile_destroyed(w, center, tile.kind)
+						world_queue_sound(w, .Building_Explode)
+						world_remove(w, target)
+					} else {
+						w.tiles[target] = tile
+					}
 				}
 			}
 			continue
@@ -230,6 +277,52 @@ enemies_update :: proc(w: ^World, dt: f32) {
 			e.pos.x += dx / d * travel
 			e.pos.y += dy / d * travel
 		}
+	}
+}
+
+// Step Spitter projectiles. Each shot is locked onto its `target` hex; we
+// damage that tile when the projectile reaches its centre. If the tile died
+// before the shot lands the projectile just expires (no friendly fire to
+// other enemies — this isn't a turret bullet).
+enemy_projectiles_update :: proc(w: ^World, dt: f32) {
+	hit_r2 := SPITTER_PROJ_HIT_R * SPITTER_PROJ_HIT_R
+	for i := len(w.enemy_projectiles) - 1; i >= 0; i -= 1 {
+		ep := &w.enemy_projectiles[i]
+		ep.pos.x += ep.vel.x * dt
+		ep.pos.y += ep.vel.y * dt
+		ep.life  -= dt
+
+		hit := false
+		if tile, present := w.tiles[ep.target]; present {
+			center := hex_to_pixel(ep.target)
+			dx := center.x - ep.pos.x
+			dy := center.y - ep.pos.y
+			if dx*dx + dy*dy <= hit_r2 {
+				tile.hp -= ep.dmg
+				if tile.hp <= 0 && tile.kind != .Core {
+					fx_emit_tile_destroyed(w, center, tile.kind)
+					world_queue_sound(w, .Building_Explode)
+					world_remove(w, ep.target)
+				} else {
+					w.tiles[ep.target] = tile
+				}
+				fx_emit_impact(w, ep.pos, ep.vel)
+				hit = true
+			}
+		}
+		if hit || ep.life <= 0 {
+			unordered_remove(&w.enemy_projectiles, i)
+		}
+	}
+}
+
+enemy_projectiles_render :: proc(w: ^World, p: ^Platform) {
+	// Teal globule to match the Spitter's body palette.
+	core := [4]f32{0.114, 0.620, 0.459, 1}
+	rim  := [4]f32{0.78,  1.0,   0.92,  1}
+	for ep in w.enemy_projectiles {
+		p->draw_circle(ep.pos.x, ep.pos.y, 5, rim)
+		p->draw_circle(ep.pos.x, ep.pos.y, 3, core)
 	}
 }
 

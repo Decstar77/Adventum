@@ -267,6 +267,51 @@ fx_emit_bomb :: proc(w: ^World, pos: [2]f32) {
 	}
 }
 
+// Expanding circular wave used by the Swarmer's death. We don't have a true
+// ring primitive — the renderer only draws filled discs — so we fake the
+// outline by layering two particles whose `r0 < r1` so they grow as life
+// drains. The slightly larger, fainter outer disc paints the bright edge, and
+// a slightly smaller darker disc that grows at the same rate eats the inside,
+// leaving the readable hollow ring you'd expect from a shockwave.
+SWARMER_SHOCK_RADIUS :: f32(56)
+
+fx_emit_swarmer_shock :: proc(w: ^World, pos: [2]f32) {
+	life :: f32(0.42)
+	// Outer bright edge: grows from a small dot to SWARMER_SHOCK_RADIUS while
+	// fading. r0 is "life full" (small), r1 is "life empty" (big), since the
+	// renderer lerps r = r1 + (r0 - r1) * t with t going 1→0.
+	emit(w, Particle{
+		pos = pos, vel = {0, 0},
+		life = life, max_life = life,
+		r0 = 4, r1 = SWARMER_SHOCK_RADIUS,
+		color = {1.0, 0.78, 0.95, 1},
+		drag  = 0,
+	})
+	// Inner "hole" that grows slightly slower, painted in the background tone
+	// so it sells the ring silhouette.
+	emit(w, Particle{
+		pos = pos, vel = {0, 0},
+		life = life * 0.95, max_life = life * 0.95,
+		r0 = 1, r1 = SWARMER_SHOCK_RADIUS - 8,
+		color = {0.10, 0.11, 0.14, 1},
+		drag  = 0,
+	})
+	// A handful of radial sparks ride the wavefront so the burst doesn't
+	// look like a single 2D primitive.
+	for k in 0 ..< 14 {
+		a := f32(k) * (2 * math.PI / 14) + rand.float32_range(-0.1, 0.1)
+		s := rand.float32_range(140, 200)
+		emit(w, Particle{
+			pos = pos,
+			vel = {math.cos(a) * s, math.sin(a) * s},
+			life = 0.35, max_life = 0.35,
+			r0 = rand.float32_range(2.0, 3.2), r1 = 0,
+			color = {0.95, 0.55, 0.85, 1},
+			drag  = 3,
+		})
+	}
+}
+
 // Smaller flash for mortar shell detonations / splash hits. `r` is the splash
 // radius so a tier-3 mortar visibly flashes wider than a tier-1.
 fx_emit_bomb_small :: proc(w: ^World, pos: [2]f32, r: f32) {

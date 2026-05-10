@@ -162,7 +162,7 @@ TICK_DT :: f32(1.0 / TICK_HZ)
 
 @(private="file")
 HOTKEYS := [BUILDABLE_COUNT]Key{
-	.Num1, .Num2, .Num3, .Num4, .Num5, .Num6, .Num7,
+	.Num1, .Num2, .Num3, .Num4, .Num5, .Num6,
 }
 
 game_init :: proc(g: ^Game) {
@@ -355,6 +355,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		turrets_fire(&g.world, dt)
 		mortars_fire(&g.world, dt)
 		projectiles_update(&g.world, dt)
+		enemy_projectiles_update(&g.world, dt)
 		enemies_update(&g.world, dt)
 		sweep_dead_enemies(&g.world)
 		particles_update(&g.world, dt)
@@ -512,6 +513,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	world_render(&g.world, p)
 	enemies_render(&g.world, p)
 	projectiles_render(&g.world, p)
+	enemy_projectiles_render(&g.world, p)
 	particles_render(&g.world, p)
 
 	// Exponential smoothing toward the hovered hex's pixel centre.

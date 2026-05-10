@@ -5,7 +5,6 @@ import "core:math"
 Tile_Kind :: enum {
 	Farm,
 	Generator,
-	Wire,
 	Turret,
 	Wall,
 	Relay,
@@ -36,11 +35,10 @@ Tile :: struct {
 	aim_angle: f32, // turret barrel angle in radians (atan2 convention)
 }
 
-// Wire is the only flat tile now — Core gets a 3-tier path that unlocks
-// the Mortar and bumps its survivability.
+// Every tile is upgradeable now — Core's 3-tier path unlocks the Mortar and
+// bumps its survivability.
 tile_max_tier :: proc(kind: Tile_Kind) -> i32 {
 	switch kind {
-	case .Wire: return 1
 	case .Farm, .Generator, .Turret, .Wall, .Relay, .Mortar, .Core: return 3
 	}
 	return 1
@@ -143,8 +141,12 @@ World :: struct {
 	core:          Hex_Coord,
 	food:          f32,
 	scrap:         i32,
-	enemies:       [dynamic]Enemy,
-	projectiles:   [dynamic]Projectile,
+	enemies:           [dynamic]Enemy,
+	projectiles:       [dynamic]Projectile,
+	// Projectiles fired *by* enemies (Spitter shots). Kept separate from the
+	// player's `projectiles` so the hit-tests never accidentally cross — turret
+	// bullets damage enemies, spitter shots damage tiles.
+	enemy_projectiles: [dynamic]Enemy_Projectile,
 	particles:     [dynamic]Particle,
 	field_crawler: Path_Field,
 	field_brute:   Path_Field,
@@ -193,6 +195,7 @@ world_shutdown :: proc(w: ^World) {
 	delete(w.tiles)
 	delete(w.enemies)
 	delete(w.projectiles)
+	delete(w.enemy_projectiles)
 	delete(w.particles)
 	delete(w.sound_queue)
 	path_field_destroy(&w.field_crawler)
@@ -205,7 +208,6 @@ tile_cost :: proc(kind: Tile_Kind) -> f32 {
 	case .Core:      return 0
 	case .Farm:      return 5
 	case .Generator: return 10
-	case .Wire:      return 4
 	case .Turret:    return 15
 	case .Wall:      return 5
 	case .Relay:     return 8
@@ -390,7 +392,6 @@ tile_max_hp :: proc(kind: Tile_Kind, tier: i32 = 1) -> f32 {
 	case .Turret:    base = 80
 	case .Mortar:    base = 70
 	case .Generator: base = 60
-	case .Wire:      base = 30
 	case .Relay:     base = 50
 	case .Farm:      base = 50
 	case:            base = 50
@@ -422,8 +423,6 @@ tile_max_hp :: proc(kind: Tile_Kind, tier: i32 = 1) -> f32 {
 		case 2: mult = 1.40
 		case 3: mult = 1.80
 		}
-	case .Wire:
-		// Not upgradeable.
 	}
 	return base * mult
 }
@@ -447,49 +446,16 @@ world_count_powered :: proc(w: ^World) -> (powered, total: int) {
 
 @(private="file")
 world_recompute_energy :: proc(w: ^World) {
-	// Pass 1: only Generator and Core start energized.
+	// Pass 1: Generator and Core power themselves; everything else is dark.
 	for coord, tile in w.tiles {
 		t := tile
 		t.energized = (tile.kind == .Generator || tile.kind == .Core)
 		w.tiles[coord] = t
 	}
 
-	// Pass 2: BFS power along Wire tiles starting from each Generator.
-	queue: [dynamic]Hex_Coord
-	defer delete(queue)
-	for coord, tile in w.tiles {
-		if tile.kind == .Generator do append(&queue, coord)
-	}
-	for i := 0; i < len(queue); i += 1 {
-		coord := queue[i]
-		for d in HEX_NEIGHBOR_OFFSETS {
-			n := Hex_Coord{coord.x + d.x, coord.y + d.y}
-			nt, ok := w.tiles[n]
-			if !ok do continue
-			if nt.kind == .Wire && !nt.energized {
-				nt.energized = true
-				w.tiles[n] = nt
-				append(&queue, n)
-			}
-		}
-	}
-
-	// Pass 3: any consumer adjacent to an energized wire is energized, and
-	// any consumer within `generator_radius(tier)` hexes of a Generator is
-	// energized directly. Tiered generators project a wider field.
-	for coord, tile in w.tiles {
-		if tile.kind == .Wire && tile.energized {
-			for d in HEX_NEIGHBOR_OFFSETS {
-				n := Hex_Coord{coord.x + d.x, coord.y + d.y}
-				nt, ok := w.tiles[n]
-				if !ok do continue
-				if !tile_consumes_energy(nt.kind) do continue
-				if nt.energized do continue
-				nt.energized = true
-				w.tiles[n] = nt
-			}
-		}
-	}
+	// Pass 2: every consumer within `generator_radius(tier)` of a Generator
+	// lights up. With the Wire kind gone, generator coverage is the only way
+	// power propagates — tiered generators project a wider field.
 	for coord, tile in w.tiles {
 		if tile.kind != .Generator do continue
 		radius := generator_radius(tile.tier)
@@ -531,7 +497,6 @@ tile_kind_name :: proc(kind: Tile_Kind) -> string {
 	case .Core:      return "Core"
 	case .Farm:      return "Farm"
 	case .Generator: return "Generator"
-	case .Wire:      return "Wire"
 	case .Turret:    return "Turret"
 	case .Wall:      return "Wall"
 	case .Relay:     return "Relay"
@@ -547,8 +512,6 @@ tile_color :: proc(kind: Tile_Kind) -> (fill, stroke: [4]f32) {
 	case .Farm:
 		return {0.918, 0.953, 0.871, 1}, {0.231, 0.427, 0.067, 1}
 	case .Generator:
-		return {0.980, 0.933, 0.855, 1}, {0.522, 0.310, 0.043, 1}
-	case .Wire:
 		return {0.980, 0.933, 0.855, 1}, {0.522, 0.310, 0.043, 1}
 	case .Turret:
 		return {0.988, 0.922, 0.922, 1}, {0.639, 0.176, 0.176, 1}
@@ -613,12 +576,6 @@ draw_tile_icon :: proc(p: ^Platform, cx, cy: f32, kind: Tile_Kind, alpha: f32, a
 			p->draw_line(zx - 6, cy - 12, zx + 6, cy +  0, 3, amber)
 			p->draw_line(zx + 6, cy +  0, zx - 4, cy + 12, 3, amber)
 		}
-
-	case .Wire:
-		spark := [4]f32{0.729, 0.459, 0.090, alpha}
-		p->draw_line(cx - 10, cy, cx + 10, cy, 3, spark)
-		p->draw_line(cx, cy - 10, cx, cy + 10, 3, spark)
-		p->draw_circle(cx, cy, 3, stroke)
 
 	case .Turret:
 		hot := [4]f32{0.886, 0.294, 0.290, alpha}
@@ -762,7 +719,7 @@ world_render :: proc(w: ^World, p: ^Platform) {
 	for coord, tile in w.tiles {
 		_, stroke := tile_color(tile.kind)
 		alpha := f32(1)
-		if (tile_consumes_energy(tile.kind) || tile.kind == .Wire) && !tile.energized {
+		if tile_consumes_energy(tile.kind) && !tile.energized {
 			alpha = 0.45
 		}
 		stroke.a *= alpha
@@ -819,7 +776,7 @@ world_render_selection_influence :: proc(w: ^World, p: ^Platform, c: Hex_Coord) 
 		radius = relay_build_radius(tile.tier)
 		// Teal, matching the relay stroke palette.
 		color = {0.25, 0.85, 0.70, 0.55}
-	case .Core, .Farm, .Wire, .Turret, .Wall, .Mortar:
+	case .Core, .Farm, .Turret, .Wall, .Mortar:
 		return
 	}
 	if radius <= 0 do return
