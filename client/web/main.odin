@@ -33,6 +33,11 @@ foreign host {
 	// the C library through emscripten.
 	js_play_sound        :: proc(sound: i32) ---
 	js_set_master_volume :: proc(v: f32) ---
+	// Fog-of-war lights drive the background shader (host.js renderBackground).
+	// World-space coordinates; the host transforms them with the latched
+	// camera so they pan/zoom with the scene.
+	js_fog_lights_clear  :: proc() ---
+	js_fog_lights_push   :: proc(x, y: f32) ---
 }
 
 App :: struct {
@@ -130,9 +135,9 @@ plat_play_sound :: proc(p: ^game.Platform, sound: game.Sound) {
 }
 
 @(private="file")
-plat_fog_lights_clear :: proc(p: ^game.Platform) {}
+plat_fog_lights_clear :: proc(p: ^game.Platform) { js_fog_lights_clear() }
 @(private="file")
-plat_fog_lights_push  :: proc(p: ^game.Platform, x, y: f32) {}
+plat_fog_lights_push  :: proc(p: ^game.Platform, x, y: f32) { js_fog_lights_push(x, y) }
 
 @(private="file")
 plat_is_key_down :: proc "contextless" (p: ^game.Platform, key: game.Key) -> bool {

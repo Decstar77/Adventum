@@ -6,6 +6,189 @@ const canvas = document.getElementById('screen');
 const ctx    = canvas.getContext('2d');
 const status = document.getElementById('status');
 
+// --- Background shader (WebGL2) --------------------------------------------
+//
+// The win32/Vulkan host renders a full-screen procedural background via
+// shaders/background.{vert,frag}: dark-teal lit base + fog-of-war disks
+// around world-space "lights" pushed by the game each frame. Canvas 2D can't
+// run that, so we stack a WebGL2 canvas underneath the 2D canvas and port
+// the same shader to GLSL ES 3.00. Layering (bg below, shapes/text above) is
+// done by CSS in index.html — both canvases share identical pixel sizes so
+// fragment coords map 1:1.
+//
+// Hard cap matches MAX_FOG_LIGHTS in shaders/background.frag and the win32
+// Background_Renderer. 256 vec2s is small enough to pass as a plain uniform
+// array — no UBO ceremony needed in WebGL2.
+
+const bgCanvas = document.getElementById('bg');
+const gl       = bgCanvas.getContext('webgl2', { antialias: false, premultipliedAlpha: false });
+
+const MAX_FOG_LIGHTS  = 256;
+const FOG_LIGHT_RADIUS  = 220.0;   // mirrors win32/background.odin
+const FOG_LIGHT_FALLOFF = 480.0;
+
+// CPU-side per-frame light list. The game clears at the top of its update
+// (before any set_camera) and pushes one entry per visible building/tile.
+const fogLights = new Float32Array(MAX_FOG_LIGHTS * 2);
+let fogLightCount = 0;
+
+// Background camera: latched separately from the 2D `cam` because the win32
+// gfx_clear_view resets only the shape view, leaving the background sticky on
+// the most recent set_camera. We mirror that: js_set_camera updates bgCam,
+// js_clear_camera does not touch it, and each frame resets it to identity
+// before web_frame so a frame that never sets a camera renders bg in screen
+// space (matching gfx_begin in win32).
+let bgCam = { sx: 1, sy: 1, ox: 0, oy: 0 };
+
+let bgProgram = null;
+let bgVAO     = null;
+let bgUniforms = {};
+
+function initBackgroundGL() {
+	if (!gl) {
+		console.warn('WebGL2 unavailable — background shader disabled, falling back to flat fill.');
+		return false;
+	}
+
+	// Fullscreen triangle. Mirrors shaders/background.vert, but in GL ES the
+	// y axis already points up so we flip the synthesised position to match
+	// Vulkan's top-left origin convention used by the rest of the game.
+	const vertSrc = `#version 300 es
+precision highp float;
+void main() {
+	vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+	// Flip y so gl_FragCoord (origin bottom-left in GL) reads the same as the
+	// Vulkan build's top-left origin once we do screen.y - gl_FragCoord.y in
+	// the fragment shader.
+	gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+	// Direct port of shaders/background.frag. Differences:
+	//   - push_constant block + UBO -> plain uniforms / uniform array
+	//   - flip y so the world-space math matches the y-down game coordinates
+	const fragSrc = `#version 300 es
+precision highp float;
+out vec4 out_color;
+
+#define MAX_FOG_LIGHTS ${MAX_FOG_LIGHTS}
+
+uniform vec2  u_screen;
+uniform vec2  u_view_scale;
+uniform vec2  u_view_offset;
+uniform float u_time;
+uniform int   u_light_count;
+uniform float u_light_radius;
+uniform float u_light_falloff;
+uniform vec2  u_lights[MAX_FOG_LIGHTS];
+
+void main() {
+	// gl_FragCoord origin is bottom-left in WebGL; flip to top-left so the
+	// camera affine (which maps world->screen with y growing downward) lines
+	// up with the 2D canvas above us.
+	vec2 frag = vec2(gl_FragCoord.x, u_screen.y - gl_FragCoord.y);
+	vec2 uv   = frag / u_screen;
+	float t   = u_time;
+
+	vec3 lit  = vec3(0.045, 0.115, 0.135);
+	lit += vec3(0.0, 0.006, 0.010) *
+	       (0.5 + 0.5 * sin(t * 0.18 + uv.y * 2.6 + uv.x * 1.3));
+	vec3 dark = vec3(0.003, 0.008, 0.012);
+
+	vec2 world = (frag - u_view_offset) / u_view_scale;
+
+	float min_d = 1e9;
+	int n = u_light_count;
+	if (n > MAX_FOG_LIGHTS) n = MAX_FOG_LIGHTS;
+	for (int i = 0; i < MAX_FOG_LIGHTS; ++i) {
+		if (i >= n) break; // GLSL ES needs a constant loop bound
+		float d = distance(world, u_lights[i]);
+		if (d < min_d) min_d = d;
+	}
+
+	float r0 = u_light_radius;
+	float r1 = r0 + max(u_light_falloff, 1.0);
+	float fade = (n == 0) ? 1.0 : smoothstep(r0, r1, min_d);
+
+	vec3 col = mix(lit, dark, fade);
+	out_color = vec4(col, 1.0);
+}`;
+
+	function compile(type, src) {
+		const sh = gl.createShader(type);
+		gl.shaderSource(sh, src);
+		gl.compileShader(sh);
+		if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+			console.error('background shader compile error:', gl.getShaderInfoLog(sh), src);
+			gl.deleteShader(sh);
+			return null;
+		}
+		return sh;
+	}
+
+	const vs = compile(gl.VERTEX_SHADER,   vertSrc);
+	const fs = compile(gl.FRAGMENT_SHADER, fragSrc);
+	if (!vs || !fs) return false;
+
+	bgProgram = gl.createProgram();
+	gl.attachShader(bgProgram, vs);
+	gl.attachShader(bgProgram, fs);
+	gl.linkProgram(bgProgram);
+	if (!gl.getProgramParameter(bgProgram, gl.LINK_STATUS)) {
+		console.error('background program link error:', gl.getProgramInfoLog(bgProgram));
+		return false;
+	}
+
+	bgUniforms = {
+		screen:       gl.getUniformLocation(bgProgram, 'u_screen'),
+		view_scale:   gl.getUniformLocation(bgProgram, 'u_view_scale'),
+		view_offset:  gl.getUniformLocation(bgProgram, 'u_view_offset'),
+		time:         gl.getUniformLocation(bgProgram, 'u_time'),
+		light_count:  gl.getUniformLocation(bgProgram, 'u_light_count'),
+		light_radius: gl.getUniformLocation(bgProgram, 'u_light_radius'),
+		light_falloff:gl.getUniformLocation(bgProgram, 'u_light_falloff'),
+		lights:       gl.getUniformLocation(bgProgram, 'u_lights[0]'),
+	};
+
+	// Empty VAO; the vertex shader synthesises positions from gl_VertexID, so
+	// we just need *a* VAO bound when issuing the draw.
+	bgVAO = gl.createVertexArray();
+
+	gl.disable(gl.BLEND);
+	gl.disable(gl.DEPTH_TEST);
+	gl.disable(gl.CULL_FACE);
+	return true;
+}
+
+function renderBackground(timeSec) {
+	if (!bgProgram) {
+		// Fallback: solid clear so the canvas isn't transparent over the
+		// page background.
+		if (gl) {
+			gl.clearColor(0.012, 0.012, 0.039, 1.0);
+			gl.clear(gl.COLOR_BUFFER_BIT);
+		}
+		return;
+	}
+
+	gl.viewport(0, 0, bgCanvas.width, bgCanvas.height);
+	gl.useProgram(bgProgram);
+	gl.bindVertexArray(bgVAO);
+
+	gl.uniform2f(bgUniforms.screen,      bgCanvas.width, bgCanvas.height);
+	gl.uniform2f(bgUniforms.view_scale,  bgCam.sx, bgCam.sy);
+	gl.uniform2f(bgUniforms.view_offset, bgCam.ox, bgCam.oy);
+	gl.uniform1f(bgUniforms.time,         timeSec);
+	gl.uniform1i(bgUniforms.light_count,  fogLightCount);
+	gl.uniform1f(bgUniforms.light_radius, FOG_LIGHT_RADIUS);
+	gl.uniform1f(bgUniforms.light_falloff,FOG_LIGHT_FALLOFF);
+	if (bgUniforms.lights && fogLightCount > 0) {
+		// uniform2fv accepts the full array — extra trailing slots are unused.
+		gl.uniform2fv(bgUniforms.lights, fogLights);
+	}
+
+	gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
 // --- Audio ------------------------------------------------------------------
 //
 // One <audio>-style buffer pool per family. Indices match the `Sound` enum in
@@ -136,8 +319,21 @@ const host = {
 		ctx.font = fontStr(font);
 		return ctx.measureText(decodeString(ptr, len)).width;
 	},
-	js_set_camera:   (sx, sy, ox, oy) => { cam = { sx, sy, ox, oy }; },
+	js_set_camera:   (sx, sy, ox, oy) => {
+		cam   = { sx, sy, ox, oy };
+		// Background latches the latest world-space camera so its lights pan
+		// with the scene; clear_camera only resets `cam` (matches gfx_clear_view
+		// in win32, which leaves bg_view sticky).
+		bgCam = { sx, sy, ox, oy };
+	},
 	js_clear_camera: ()               => { cam = { sx: 1, sy: 1, ox: 0, oy: 0 }; },
+	js_fog_lights_clear: () => { fogLightCount = 0; },
+	js_fog_lights_push:  (x, y) => {
+		if (fogLightCount >= MAX_FOG_LIGHTS) return;
+		fogLights[fogLightCount * 2 + 0] = x;
+		fogLights[fogLightCount * 2 + 1] = y;
+		fogLightCount++;
+	},
 	js_push_scissor: (x, y, w, h) => {
 		ctx.save();
 		ctx.beginPath();
@@ -276,6 +472,7 @@ let exports;
 		const result = await WebAssembly.instantiateStreaming(fetch(url), imports);
 		exports = result.instance.exports;
 		memory  = exports.memory;
+		initBackgroundGL();
 		exports.web_init();
 		status.remove();
 		canvas.focus();
@@ -287,12 +484,27 @@ let exports;
 			const time  = (now - start) / 1000;
 			last = now;
 			const dy = scrollDy; scrollDy = 0;
-			// Equivalent of the win32 Vulkan render-pass clear; canvas keeps the
-			// previous frame around otherwise.
+
+			// Clear the 2D canvas to transparent so the WebGL background
+			// canvas underneath is visible. clearRect is the cheap way to
+			// drop everything from the previous frame without painting a
+			// fill on top.
 			ctx.setTransform(1, 0, 0, 1, 0, 0);
-			ctx.fillStyle = '#03030a';
-			ctx.fillRect(0, 0, canvas.width, canvas.height);
+			ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+			// Reset the latched background camera each frame to match
+			// gfx_begin's `bg_view = identity`. The game's set_camera call
+			// during web_frame will overwrite this to whatever world-space
+			// affine is active when fog lights are pushed.
+			bgCam = { sx: 1, sy: 1, ox: 0, oy: 0 };
+
 			exports.web_frame(dt, time, canvas.width, canvas.height, mouseX, mouseY, dy, mouseLeft, mouseRight);
+
+			// Render bg after web_frame so we use the fog lights and camera
+			// the game just pushed. Layering is by canvas stacking, not by
+			// draw order, so doing this last is safe.
+			renderBackground(time);
+
 			requestAnimationFrame(frame);
 		}
 		requestAnimationFrame(frame);

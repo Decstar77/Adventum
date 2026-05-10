@@ -6,12 +6,20 @@
 <style>
   html, body { margin: 0; background: #050507; height: 100%; overflow: hidden; }
   body { display: grid; place-items: center; font-family: monospace; color: #aab; }
-  canvas { display: block; background: #050507; cursor: default; image-rendering: pixelated; }
+  /* Stack the WebGL background under the 2D shapes/text canvas. They share
+     identical pixel dimensions so the GL coords map 1:1 onto the 2D coords. */
+  #stage  { position: relative; width: 1280px; height: 720px; }
+  #stage canvas { position: absolute; inset: 0; display: block; cursor: default; }
+  #screen { image-rendering: pixelated; background: transparent; }
+  #bg     { background: #050507; }
   #status { position: fixed; top: 8px; left: 12px; opacity: 0.7; }
 </style>
 </head>
 <body>
-<canvas id="screen" width="1280" height="720" tabindex="0"></canvas>
+<div id="stage">
+  <canvas id="bg"     width="1280" height="720"></canvas>
+  <canvas id="screen" width="1280" height="720" tabindex="0"></canvas>
+</div>
 <div id="status">loading…</div>
 <script type="module" src="host.js"></script>
 </body>
