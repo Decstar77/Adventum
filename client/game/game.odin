@@ -22,6 +22,12 @@ Game :: struct {
 	selected_tile: Hex_Coord,
 	has_selection: bool,
 
+	// Pause menu. Volume is a stub — no audio is wired up yet, but the slider
+	// drives this value so it's ready for FMOD when it lands.
+	paused:           bool,
+	volume:           f32,
+	volume_dragging:  bool,
+
 	// Right-mouse pan: track the mouse position from last frame so we can
 	// turn movement-while-RMB-held into camera panning. `rmb_drag_total` is
 	// the accumulated pixel distance since RMB went down — if it stays below
@@ -106,6 +112,7 @@ game_init :: proc(g: ^Game) {
 	g.cam = Camera{pos = {0, 0}, zoom = 1}
 	g.selected_kind = .Farm
 	g.mode = .Default
+	g.volume = 0.7
 	world_init(&g.world)
 	// Initial energization pass so the Core's energized flag is correct from frame 0.
 	world_tick(&g.world, 0)
@@ -114,6 +121,36 @@ game_init :: proc(g: ^Game) {
 game_shutdown :: proc(g: ^Game) {
 	world_shutdown(&g.world)
 	ui_shutdown(&g.ui)
+}
+
+// Reset the world to a fresh start. Used by the game-over `R` shortcut and the
+// pause-menu Restart button. Volume is preserved across restarts.
+game_restart :: proc(g: ^Game) {
+	world_shutdown(&g.world)
+	g.world = World{}
+	world_init(&g.world)
+	world_tick(&g.world, 0)
+	g.cam = Camera{pos = {0, 0}, zoom = 1}
+	g.selected_kind = .Farm
+	g.mode = .Default
+	g.has_selection = false
+	g.tick_accum = 0
+	g.paused = false
+}
+
+// Stylised gear icon for the pause-menu button — four cardinal teeth, a body
+// disc, and a darker hole. We don't have rotated quads, so the teeth sit on
+// the axes; that's enough to read as a gear at this size.
+draw_gear_icon :: proc(p: ^Platform, cx, cy, s: f32, color: [4]f32) {
+	r := s * 0.5
+	tw := s * 0.20
+	th := s * 0.22
+	p->draw_rect(cx - tw*0.5, cy - r,        tw, th, color)
+	p->draw_rect(cx - tw*0.5, cy + r - th,   tw, th, color)
+	p->draw_rect(cx - r,        cy - tw*0.5, th, tw, color)
+	p->draw_rect(cx + r - th,   cy - tw*0.5, th, tw, color)
+	p->draw_circle(cx, cy, r * 0.78, color)
+	p->draw_circle(cx, cy, r * 0.28, {0.10, 0.11, 0.14, 1})
 }
 
 game_update_and_render :: proc(g: ^Game, p: ^Platform) {
@@ -133,22 +170,39 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 
 	ui_begin_frame(&g.ui)
 
+	// Escape opens the pause menu when nothing else needs cancelling. If the
+	// player is mid-placement or has a tile selected, escape clears that first
+	// (preserves the long-standing muscle memory) — second press pauses.
+	if p->is_key_just_pressed(.Escape) {
+		switch {
+		case g.paused:
+			g.paused = false
+		case g.mode == .Place || g.has_selection:
+			g.mode = .Default
+			g.has_selection = false
+		case:
+			g.paused = true
+		}
+	}
+
+	paused := g.paused
+
 	// Camera pan via WASD plus an edge-of-screen mouse pan.
 	PAN_SPEED       :: f32(400)
 	EDGE_MARGIN     :: f32(24)
 	EDGE_PAN_SPEED  :: f32(550)
 	pan: [2]f32
-	if p->is_key_down(.W) do pan.y -= 1
-	if p->is_key_down(.S) do pan.y += 1
-	if p->is_key_down(.A) do pan.x -= 1
-	if p->is_key_down(.D) do pan.x += 1
+	if !paused && p->is_key_down(.W) do pan.y -= 1
+	if !paused && p->is_key_down(.S) do pan.y += 1
+	if !paused && p->is_key_down(.A) do pan.x -= 1
+	if !paused && p->is_key_down(.D) do pan.x += 1
 	if pan.x != 0 || pan.y != 0 {
 		g.cam.pos += pan * (PAN_SPEED * dt / g.cam.zoom)
 	}
 
 	// Mouse edge scroll: only when the cursor is inside the window. Pan
 	// speed ramps from 0 at EDGE_MARGIN inward to full speed at the edge.
-	if p.mouse.x >= 0 && p.mouse.y >= 0 && p.mouse.x < sw && p.mouse.y < sh {
+	if !paused && p.mouse.x >= 0 && p.mouse.y >= 0 && p.mouse.x < sw && p.mouse.y < sh {
 		edge: [2]f32
 		if p.mouse.x < EDGE_MARGIN          do edge.x = -(1 - p.mouse.x / EDGE_MARGIN)
 		else if p.mouse.x > sw - EDGE_MARGIN do edge.x =  1 - (sw - p.mouse.x) / EDGE_MARGIN
@@ -161,11 +215,11 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 
 	// Shift+Enter: toggle borderless fullscreen on the primary monitor.
 	shift_down := p->is_key_down(.Left_Shift) || p->is_key_down(.Right_Shift)
-	if shift_down && p->is_key_just_pressed(.Enter) {
+	if !paused && shift_down && p->is_key_just_pressed(.Enter) {
 		p->toggle_fullscreen()
 	}
 
-	if p.scroll_dy != 0 {
+	if !paused && p.scroll_dy != 0 {
 		before := camera_screen_to_world(&g.cam, p.mouse, sw, sh)
 		zoom_factor := f32(1) + p.scroll_dy * 0.1
 		g.cam.zoom *= zoom_factor
@@ -175,17 +229,14 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		g.cam.pos += before - after
 	}
 
-	for k, i in HOTKEYS {
-		if p->is_key_just_pressed(k) {
-			g.selected_kind = Tile_Kind(i)
-			g.mode = .Place
-			g.has_selection = false
+	if !paused {
+		for k, i in HOTKEYS {
+			if p->is_key_just_pressed(k) {
+				g.selected_kind = Tile_Kind(i)
+				g.mode = .Place
+				g.has_selection = false
+			}
 		}
-	}
-
-	if p->is_key_just_pressed(.Escape) {
-		g.mode = .Default
-		g.has_selection = false
 	}
 
 	// Drop stale selection (tile sold or destroyed).
@@ -193,24 +244,19 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		if _, ok := g.world.tiles[g.selected_tile]; !ok do g.has_selection = false
 	}
 
-	if !g.world.game_over {
+	if !paused && !g.world.game_over {
 		if p->is_key_just_pressed(.C) do enemy_spawn(&g.world, .Crawler)
 		if p->is_key_just_pressed(.B) do enemy_spawn(&g.world, .Brute)
 		if p->is_key_just_pressed(.V) do enemy_spawn(&g.world, .Spitter)
+		// F6: skip the surge cooldown and fire the next wave on this frame.
+		if p->is_key_just_pressed(.F6) do waves_force_next_surge(&g.world.waves)
 	}
 
-	if g.world.game_over && p->is_key_just_pressed(.R) {
-		world_shutdown(&g.world)
-		g.world = World{}
-		world_init(&g.world)
-		world_tick(&g.world, 0)
-		g.cam = Camera{pos = {0, 0}, zoom = 1}
-		g.selected_kind = .Farm
-		g.mode = .Default
-		g.tick_accum = 0
+	if !paused && g.world.game_over && p->is_key_just_pressed(.R) {
+		game_restart(g)
 	}
 
-	if !g.world.game_over {
+	if !paused && !g.world.game_over {
 		g.world.survive_time += dt
 
 		g.tick_accum += dt
@@ -240,9 +286,20 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	mouse_in_picker := point_in_rect(p.mouse, picker_x, picker_y, picker_w, picker_h)
 
 	// Right-side selection panel (only visible when something is selected).
+	// Pushed down past the gear icon so they don't fight for the same corner.
 	panel_x := sw - PANEL_W - 12
-	panel_y := f32(12)
+	panel_y := f32(56)
 	mouse_in_panel := g.has_selection && point_in_rect(p.mouse, panel_x, panel_y, PANEL_W, PANEL_H)
+
+	// Gear button (top-right). Always above other UI so the player can pause
+	// even mid-placement; we suppress world clicks underneath it as well.
+	GEAR_S := f32(36)
+	gear_x := sw - 12 - GEAR_S
+	gear_y := f32(12)
+	mouse_in_gear := point_in_rect(p.mouse, gear_x, gear_y, GEAR_S, GEAR_S)
+	if !paused && mouse_in_gear && p.mouse_left_pressed {
+		g.paused = true
+	}
 
 	// Hex under cursor
 	mouse_world := camera_screen_to_world(&g.cam, p.mouse, sw, sh)
@@ -260,7 +317,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	mouse_delta := p.mouse - g.prev_mouse
 
 	rmb_clicked := false
-	if p.mouse_right_down {
+	if !paused && p.mouse_right_down {
 		if !g.rmb_was_down {
 			g.rmb_drag_total = 0
 		} else if g.cam.zoom > 0 {
@@ -268,16 +325,16 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 			g.cam.pos -= mouse_delta / g.cam.zoom
 		}
 		g.rmb_drag_total += abs(mouse_delta.x) + abs(mouse_delta.y)
-	} else if g.rmb_was_down {
+	} else if !paused && g.rmb_was_down {
 		// Release.
 		if g.rmb_drag_total < RMB_CLICK_THRESHOLD do rmb_clicked = true
 	}
-	g.rmb_was_down = p.mouse_right_down
+	g.rmb_was_down = !paused && p.mouse_right_down
 
 	// Place / remove via mouse on the world (suppressed when over the picker bar)
 	lmb_just := p.mouse_left_pressed
 	shift_held := p->is_key_down(.Left_Shift) || p->is_key_down(.Right_Shift)
-	if !mouse_in_picker && !mouse_in_panel && !g.world.game_over {
+	if !paused && !mouse_in_picker && !mouse_in_panel && !mouse_in_gear && !g.world.game_over {
 		if lmb_just && g.mode == .Place {
 			if world_place(&g.world, hover, g.selected_kind) {
 				if !shift_held do g.mode = .Default
@@ -335,7 +392,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	if !g.world.game_over {
 		world_render_hover(&g.world, p, hover, g.hover_smoothed, g.mode == .Place, g.selected_kind)
 
-		if g.mode == .Default && !mouse_in_picker && !mouse_in_panel {
+		if g.mode == .Default && !mouse_in_picker && !mouse_in_panel && !mouse_in_gear && !paused {
 			if _, ok := g.world.tiles[hover]; ok {
 				draw_hex_outline(p, hover, 2.5, {1, 1, 1, 0.9})
 			}
@@ -416,7 +473,18 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	p->draw_text(hud_text_x, y1, fmt.tprintf("%d", i32(g.world.food)),                                    {0.92, 0.98, 0.78, 1}, .Small)
 	p->draw_text(hud_text_x, y2, fmt.tprintf("%d", g.world.scrap),                                        {0.72, 0.83, 0.96, 1}, .Small)
 	p->draw_text(hud_text_x, y3, fmt.tprintf("%.0f", core_hp),                                            {0.85, 0.82, 0.99, 1}, .Small)
-	p->draw_text(hud_text_x, y4, fmt.tprintf("%d  [C] crawler  [B] brute", len(g.world.enemies)),         {0.96, 0.78, 0.78, 1}, .Small)
+	// Per-kind tally so a "huge" total can be read at a glance — useful for
+	// spotting trickle pile-up vs. a fresh surge. Hotkeys live on the same row
+	// since they're a debug spawn aid that pairs with the same vocabulary.
+	enemy_crawlers, enemy_brutes, enemy_spitters: i32
+	for e in g.world.enemies {
+		switch e.kind {
+		case .Crawler: enemy_crawlers += 1
+		case .Brute:   enemy_brutes   += 1
+		case .Spitter: enemy_spitters += 1
+		}
+	}
+	p->draw_text(hud_text_x, y4, fmt.tprintf("%d  (C %d  B %d  V %d)", len(g.world.enemies), enemy_crawlers, enemy_brutes, enemy_spitters), {0.96, 0.78, 0.78, 1}, .Small)
 
 	// Big timer at top-center.
 	timer_str := fmt.tprintf("%.1fs", g.world.survive_time)
@@ -548,5 +616,79 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		p->draw_text((sw - hw) * 0.5, cy - 28, head, {1.00, 0.82, 0.82, 1}, .Large)
 		p->draw_text((sw - bw) * 0.5, cy + 24, body, {0.96, 0.96, 0.96, 1},  .Small)
 		p->draw_text((sw - tw) * 0.5, cy + 56, tip,  {0.78, 0.86, 1.00, 1},  .Small)
+	}
+
+	// Gear button (top-right). Drawn after everything else so it sits above the
+	// HUD and selection panel; the click was already consumed up top.
+	{
+		gear_hover := mouse_in_gear
+		gear_held  := gear_hover && p.mouse_left_down
+		bg := [4]f32{0.18, 0.20, 0.26, 0.85}
+		if gear_held       do bg = {0.10, 0.12, 0.16, 0.95}
+		else if gear_hover do bg = {0.26, 0.30, 0.40, 0.95}
+		p->draw_rect(gear_x, gear_y, GEAR_S, GEAR_S, bg)
+		draw_gear_icon(p, gear_x + GEAR_S*0.5, gear_y + GEAR_S*0.5, GEAR_S * 0.7, {0.95, 0.95, 0.98, 1})
+	}
+
+	// Pause menu — modal overlay on top of everything. Gameplay input has
+	// already been gated above via `paused`; here we only render and process
+	// the menu's own controls.
+	if g.paused {
+		p->draw_rect(0, 0, sw, sh, {0, 0, 0, 0.55})
+
+		PMW := f32(360)
+		PMH := f32(300)
+		px := (sw - PMW) * 0.5
+		py := (sh - PMH) * 0.5
+
+		p->draw_rect(px, py, PMW, PMH, {0.10, 0.11, 0.14, 0.95})
+		p->draw_line(px,       py,       px + PMW, py,       1, {1, 1, 1, 0.15})
+		p->draw_line(px,       py + PMH, px + PMW, py + PMH, 1, {0, 0, 0, 0.40})
+
+		title := "Paused"
+		tw := p->text_measure(title, .Large)
+		p->draw_text(px + (PMW - tw) * 0.5, py + 16 + font_large, title, {0.95, 0.95, 0.98, 1}, .Large)
+
+		// Volume slider — stub; no audio hooked up yet.
+		vol_label := fmt.tprintf("Volume   %d%%", i32(g.volume * 100 + 0.5))
+		p->draw_text(px + 24, py + 16 + font_large + 36 + font_small, vol_label, {0.85, 0.90, 0.98, 1}, .Small)
+
+		track_x := px + 24
+		track_w := PMW - 48
+		track_h := f32(8)
+		track_y := py + 16 + font_large + 36 + font_small + 14
+		p->draw_rect(track_x, track_y, track_w,                 track_h, {0.05, 0.06, 0.08, 1})
+		p->draw_rect(track_x, track_y, track_w * g.volume,      track_h, {0.45, 0.85, 0.55, 1})
+		knob_cx := track_x + track_w * g.volume
+		knob_cy := track_y + track_h * 0.5
+		p->draw_circle(knob_cx, knob_cy, 9, {0.95, 0.95, 0.98, 1})
+
+		// Hit area is the track expanded vertically so the knob is easy to grab.
+		hit_x := track_x
+		hit_y := track_y - 12
+		hit_w := track_w
+		hit_h := track_h + 24
+		if p.mouse_left_pressed && point_in_rect(p.mouse, hit_x, hit_y, hit_w, hit_h) {
+			g.volume_dragging = true
+		}
+		if !p.mouse_left_down do g.volume_dragging = false
+		if g.volume_dragging {
+			t := (p.mouse.x - track_x) / track_w
+			if t < 0 do t = 0
+			if t > 1 do t = 1
+			g.volume = t
+		}
+
+		btn_w := PMW - 48
+		btn_h := f32(40)
+		bx    := px + 24
+		restart_y := py + PMH - 16 - btn_h*2 - 10
+		resume_y  := py + PMH - 16 - btn_h
+		if ui_button(&g.ui, p, "Restart", bx, restart_y, btn_w, btn_h) {
+			game_restart(g)
+		}
+		if ui_button(&g.ui, p, "Resume",  bx, resume_y,  btn_w, btn_h) {
+			g.paused = false
+		}
 	}
 }

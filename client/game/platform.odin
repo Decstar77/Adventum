@@ -22,6 +22,7 @@ Key :: enum {
 	Escape,
 	Enter,
 	Left_Shift, Right_Shift,
+	F6, // debug: force the next surge wave immediately
 }
 
 KEY_COUNT :: len(Key)

@@ -38,6 +38,17 @@ waves_shutdown :: proc(w: ^Wave_State) {
 	delete(w.surge.queue)
 }
 
+// Debug hook: schedule the next surge to fire on the very next waves_update
+// tick. No-op while a surge is already active. Also pulls `elapsed` past the
+// grace period so the early-return in waves_update can't swallow the trigger
+// when the player presses this in the opening seconds of a run.
+waves_force_next_surge :: proc(w: ^Wave_State) {
+	if w.surge_active do return
+	if w.elapsed < WAVE_GRACE_PERIOD do w.elapsed = WAVE_GRACE_PERIOD
+	w.next_surge_at = w.elapsed
+	w.trickle_acc = 0
+}
+
 waves_time_to_next_surge :: proc(w: ^Wave_State) -> f32 {
 	if w.surge_active do return 0
 	t := w.next_surge_at - w.elapsed
@@ -104,7 +115,13 @@ waves_update :: proc(world: ^World, w: ^Wave_State, dt: f32) {
 		w.banner_time     = WAVE_BANNER_DURATION
 	}
 
-	// Active surge: spawn-out staggered over the duration.
+	// Active surge: spawn-out staggered over the duration. The interval is
+	// computed once from the *initial* queue length so pacing matches the
+	// designed duration; we then keep popping at that cadence until the queue
+	// fully drains. We deliberately do NOT end the surge on `time_left <= 0`
+	// alone — float drift between `spawn_acc` and `time_left` (both fed by the
+	// same dt but consumed differently) reliably left 1-2 items unspawned, and
+	// since the queue's tail is brutes, brutes were the ones that vanished.
 	if w.surge_active {
 		w.surge.time_left -= dt
 		total := i32(len(w.surge.queue))
@@ -118,10 +135,10 @@ waves_update :: proc(world: ^World, w: ^Wave_State, dt: f32) {
 				enemy_spawn(world, kind)
 			}
 		}
-		if w.surge.time_left <= 0 || len(w.surge.queue) == 0 {
+		if len(w.surge.queue) == 0 {
 			w.surge_active   = false
 			w.surge_index   += 1
-			w.next_surge_at  = w.elapsed + WAVE_SURGE_GAP
+			w.next_surge_at  = w.elapsed + f32(max( i32(WAVE_SURGE_GAP) / w.surge_index, 30 ))
 		}
 	}
 }
