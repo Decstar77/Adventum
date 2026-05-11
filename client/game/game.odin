@@ -63,8 +63,8 @@ Cost_Sign :: enum { Spend, Gain }
 // Button with a label followed by a signed cost and a food icon, e.g.
 // "Upgrade  -15 [food]" or "Sell  +7 [food]". The label, number, and icon
 // are centered together as one cluster so the spacing reads as a single tag.
-button_with_food_cost :: proc(ui: ^UI, p: ^Platform, label: string, amount: i32, sign: Cost_Sign, x, y, w, h: f32) -> bool {
-	hover := point_in_rect(p.mouse, x, y, w, h)
+button_with_food_cost :: proc(ui: ^UI, p: ^Platform, label: string, amount: i32, sign: Cost_Sign, x, y, w, h: f32, disabled: bool = false) -> bool {
+	hover := !disabled && point_in_rect(p.mouse, x, y, w, h)
 	held  := hover && p.mouse_left_down
 	ui_track_hover(ui, p, hover, ui_button_key(x, y))
 
@@ -95,12 +95,19 @@ button_with_food_cost :: proc(ui: ^UI, p: ^Platform, label: string, amount: i32,
 	font_small := p->font_size_px(.Small)
 	ty := y + h * 0.5 + font_small * 0.3
 
-	tint := sign == .Spend ? [4]f32{1.0, 0.78, 0.78, 1} : [4]f32{0.85, 1.0, 0.80, 1}
-	p->draw_text(cx0,                                        ty, label,   {1, 1, 1, 1}, .Small)
-	p->draw_text(cx0 + label_w + gap_label_num,              ty, num_str, tint,         .Small)
+	label_tint := disabled ? [4]f32{0.7, 0.7, 0.75, 1} : [4]f32{1, 1, 1, 1}
+	tint_spend := disabled ? [4]f32{0.9, 0.6, 0.6, 1} : [4]f32{1.0, 0.78, 0.78, 1}
+	tint_gain  := disabled ? [4]f32{0.7, 0.85, 0.7, 1} : [4]f32{0.85, 1.0, 0.80, 1}
+	tint := sign == .Spend ? tint_spend : tint_gain
+	p->draw_text(cx0,                                        ty, label,   label_tint, .Small)
+	p->draw_text(cx0 + label_w + gap_label_num,              ty, num_str, tint,       .Small)
 	icon_x := cx0 + label_w + gap_label_num + num_w + gap_num_icon
 	icon_y := y + (h - icon_s) * 0.5
 	draw_food_icon(p, icon_x, icon_y, icon_s)
+
+	if disabled {
+		p->draw_rect(x, y, w, h, {0, 0, 0, 0.40})
+	}
 
 	clicked := hover && p.mouse_left_pressed
 	if clicked do p->play_sound(.Button_Click)
@@ -408,9 +415,10 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	mouse_in_picker := point_in_rect(p.mouse, picker_x, picker_y, picker_w, picker_h)
 
 	// Right-side selection panel (only visible when something is selected).
-	// Pushed down past the gear icon so they don't fight for the same corner.
+	// Vertically centred on the right edge so it sits clear of the gear +
+	// ability stack in the top-right corner.
 	panel_x := sw - PANEL_W - 12
-	panel_y := f32(56)
+	panel_y := (sh - PANEL_H) * 0.5
 	mouse_in_panel := g.has_selection && point_in_rect(p.mouse, panel_x, panel_y, PANEL_W, PANEL_H)
 
 	// Gear button (top-right). Always above other UI so the player can pause
@@ -506,12 +514,11 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 			}
 		}
 		if rmb_clicked {
-			switch g.mode {
-			case .Place, .Target_Bomb:
-				g.mode = .Default
-			case .Default:
-				world_remove(&g.world, hover)
-			}
+			// Mirror Escape: clear placement/target mode and drop any tile
+			// selection. Right-click no longer removes tiles — selling lives on
+			// the selection panel, and accidental RMB-removes were too easy.
+			g.mode = .Default
+			g.has_selection = false
 		}
 	}
 
@@ -799,7 +806,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 			case at_max:
 				ui_button_at(&g.ui, p, "Upgrade  (max)", btn_x, upgrade_y, btn_w, btn_h)
 			case:
-				clicked = button_with_food_cost(&g.ui, p, "Upgrade", i32(up_cost), .Spend, btn_x, upgrade_y, btn_w, btn_h)
+				clicked = button_with_food_cost(&g.ui, p, "Upgrade", i32(up_cost), .Spend, btn_x, upgrade_y, btn_w, btn_h, !can_up)
 			}
 			if clicked && can_up {
 				world_upgrade(&g.world, g.selected_tile)

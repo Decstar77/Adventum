@@ -84,7 +84,11 @@ turrets_fire :: proc(w: ^World, dt: f32) {
 			tp := w.enemies[idx].pos
 			target_angle = math.atan2(tp.y - origin.y, tp.x - origin.x)
 		}
-		t.aim_angle = approach_angle(t.aim_angle, target_angle, TURRET_ROT_SPEED * dt)
+		// Only track targets while energized — an unpowered turret reads as
+		// inert, so the barrel freezes on its last bearing instead of slewing.
+		if t.energized {
+			t.aim_angle = approach_angle(t.aim_angle, target_angle, TURRET_ROT_SPEED * dt)
+		}
 
 		if t.cooldown > 0 {
 			t.cooldown -= dt
@@ -234,7 +238,10 @@ mortars_fire :: proc(w: ^World, dt: f32) {
 			for d < -math.PI do d += 2 * math.PI
 			return d
 		}
-		t.aim_angle = approach(t.aim_angle, target_angle, MORTAR_ROT_SPEED * dt)
+		// Match turret behaviour: an unpowered mortar holds its last bearing.
+		if t.energized {
+			t.aim_angle = approach(t.aim_angle, target_angle, MORTAR_ROT_SPEED * dt)
+		}
 		if t.cooldown > 0 {
 			t.cooldown -= dt
 			if t.cooldown < 0 do t.cooldown = 0
