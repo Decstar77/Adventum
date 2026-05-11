@@ -228,8 +228,13 @@ let masterVolume = 1.0;
 // salvo (18 turrets on one tick) and rapid cross-frame repeats from stacking.
 // Indices match the Sound enum: 0=None, 1=Hover, 2=Click, 3=Place, 4=Explode,
 // 5=Turret, 6=Enemy_Attack, 7=Enemy_Die.
-const SOUND_MIN_INTERVAL_MS = [0, 50, 0, 0, 60, 60, 80, 60];
+const SOUND_MIN_INTERVAL_MS = [0, 50, 0, 0, 120, 110, 140, 110];
 const lastPlayedMs = new Array(SOUND_MIN_INTERVAL_MS.length).fill(-Infinity);
+
+// Max concurrent positional voices per family. Spatial plays that exceed the
+// cap are dropped; non-positional plays don't count toward this.
+const SOUND_MAX_VOICES = [0, 0, 0, 2, 2, 3, 2, 2];
+const activeVoiceCount = new Array(SOUND_MAX_VOICES.length).fill(0);
 
 const soundPool = SOUND_FILES.map(variants =>
 	variants.map(src => {
@@ -263,6 +268,126 @@ function playSound(soundIdx) {
 		// plays will succeed.
 		a.play().catch(() => {});
 	} catch {}
+}
+
+// --- Spatial audio (Web Audio API) ------------------------------------------
+//
+// Lazy-init an AudioContext on the first spatial play (browsers gate creation
+// of AudioContexts on a user gesture too, so deferring until the first sound
+// event lines up well with input). We decode each variant once into an
+// AudioBuffer and share it across plays. Each play spins up a transient
+// BufferSourceNode → PannerNode → master gain.
+//
+// Listener tracks the game's camera (set by `js_set_listener`). Pan + distance
+// attenuation map closely to the win32 backend: 1 hex pitch (~72 px) per audio
+// unit, linear rolloff inside [1, 14] units.
+
+const AUDIO_PIXELS_PER_UNIT = 72;
+const AUDIO_REF_DISTANCE    = 1;
+const AUDIO_MAX_DISTANCE    = 14;
+const AUDIO_ROLLOFF         = 1.0;
+
+let audioCtx       = null;
+let audioMasterGain = null;
+let audioBuffers   = null;       // shape: SOUND_FILES.map(v => v.map(_ => AudioBuffer | Promise))
+let listenerPx     = { x: 0, y: 0 };
+
+function ensureAudio() {
+	if (audioCtx) return audioCtx;
+	const Ctx = window.AudioContext || window.webkitAudioContext;
+	if (!Ctx) return null;
+	audioCtx = new Ctx();
+	audioMasterGain = audioCtx.createGain();
+	audioMasterGain.gain.value = masterVolume;
+	audioMasterGain.connect(audioCtx.destination);
+	// Kick off decode of every variant. Plays that race the decode just drop;
+	// once the buffer resolves subsequent plays use it.
+	audioBuffers = SOUND_FILES.map(variants =>
+		variants.map(src => {
+			const url = new URL(src, import.meta.url).href;
+			return fetch(url)
+				.then(r => r.arrayBuffer())
+				.then(buf => audioCtx.decodeAudioData(buf))
+				.catch(() => null);
+		})
+	);
+	// Apply the listener pos we may have already received before init.
+	applyListener();
+	return audioCtx;
+}
+
+function applyListener() {
+	if (!audioCtx) return;
+	const x = listenerPx.x / AUDIO_PIXELS_PER_UNIT;
+	const z = listenerPx.y / AUDIO_PIXELS_PER_UNIT;
+	const L = audioCtx.listener;
+	// Newer browsers expose positionX/Y/Z as AudioParams; older ones expose
+	// setPosition(). Support both.
+	if (L.positionX) {
+		L.positionX.value = x;
+		L.positionY.value = 0;
+		L.positionZ.value = z;
+	} else if (L.setPosition) {
+		L.setPosition(x, 0, z);
+	}
+}
+
+function setListener(xPx, yPx) {
+	listenerPx.x = xPx;
+	listenerPx.y = yPx;
+	applyListener();
+}
+
+function playSoundAt(soundIdx, xPx, yPx) {
+	const variants = SOUND_FILES[soundIdx];
+	if (!variants || variants.length === 0) return;
+	const ctx = ensureAudio();
+	if (!ctx) return;
+	if (ctx.state === 'suspended') ctx.resume();
+
+	// Share the per-family cooldown with the non-spatial path so a salvo of
+	// turret shots and a UI click of the same family don't fight each other.
+	const minIv = SOUND_MIN_INTERVAL_MS[soundIdx] || 0;
+	const now = performance.now();
+	if (minIv > 0 && now - lastPlayedMs[soundIdx] < minIv) return;
+
+	// Concurrent-voice cap: drop the play if too many copies are still ringing.
+	const maxVoices = SOUND_MAX_VOICES[soundIdx] || 0;
+	if (maxVoices > 0 && activeVoiceCount[soundIdx] >= maxVoices) return;
+
+	lastPlayedMs[soundIdx] = now;
+	activeVoiceCount[soundIdx]++;
+
+	const variantIdx = (Math.random() * variants.length) | 0;
+	const entry = audioBuffers[soundIdx][variantIdx];
+	// Buffers are stored as Promises until decode lands; resolved ones become
+	// the AudioBuffer directly via the .then below.
+	Promise.resolve(entry).then(buf => {
+		if (!buf || !audioCtx) {
+			activeVoiceCount[soundIdx]--;
+			return;
+		}
+		const src = audioCtx.createBufferSource();
+		src.buffer = buf;
+		src.onended = () => { activeVoiceCount[soundIdx]--; };
+		const panner = audioCtx.createPanner();
+		panner.panningModel    = 'HRTF';
+		panner.distanceModel   = 'linear';
+		panner.refDistance     = AUDIO_REF_DISTANCE;
+		panner.maxDistance     = AUDIO_MAX_DISTANCE;
+		panner.rolloffFactor   = AUDIO_ROLLOFF;
+		const x = xPx / AUDIO_PIXELS_PER_UNIT;
+		const z = yPx / AUDIO_PIXELS_PER_UNIT;
+		if (panner.positionX) {
+			panner.positionX.value = x;
+			panner.positionY.value = 0;
+			panner.positionZ.value = z;
+		} else if (panner.setPosition) {
+			panner.setPosition(x, 0, z);
+		}
+		src.connect(panner).connect(audioMasterGain);
+		src.start();
+	}).catch(() => {});
 }
 
 // Camera: we apply the (scale, offset) manually inside each draw call so the
@@ -347,7 +472,12 @@ const host = {
 	},
 	js_request_quit: () => { window.close(); },
 	js_play_sound:        (sound) => { playSound(sound); },
-	js_set_master_volume: (v)     => { masterVolume = Math.max(0, Math.min(1, v)); },
+	js_play_sound_at:     (sound, x, y) => { playSoundAt(sound, x, y); },
+	js_set_listener:      (x, y) => { setListener(x, y); },
+	js_set_master_volume: (v)     => {
+		masterVolume = Math.max(0, Math.min(1, v));
+		if (audioMasterGain) audioMasterGain.gain.value = masterVolume;
+	},
 };
 
 // --- Input mapping. Indices must match the Key enum in client/game/platform.odin.

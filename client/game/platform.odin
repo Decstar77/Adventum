@@ -84,9 +84,17 @@ Platform :: struct {
 	toggle_fullscreen: proc(p: ^Platform),
 	request_quit:      proc(p: ^Platform),
 
-	// Audio. Game writes `master_volume` (0..1) each frame; the host applies it
-	// to the underlying audio engine. `play_sound` is fire-and-forget — the
-	// host is free to overlap copies of the same family.
-	master_volume: f32,
-	play_sound:    proc(p: ^Platform, sound: Sound),
+	// Audio. Game writes `master_volume` (0..1) each frame; the host applies
+	// it to the underlying audio engine. `play_sound` is fire-and-forget —
+	// the host is free to overlap copies of the same family.
+	//
+	// For spatial audio the game also writes the world-space listener position
+	// (`listener_x` / `listener_y`) each frame, and emits positional sounds
+	// via `play_sound_at`. Non-positional cues (UI clicks, hover) stay on
+	// `play_sound`, which the host plays without attenuation or panning.
+	master_volume:  f32,
+	listener_x:     f32,
+	listener_y:     f32,
+	play_sound:     proc(p: ^Platform, sound: Sound),
+	play_sound_at:  proc(p: ^Platform, sound: Sound, x, y: f32),
 }

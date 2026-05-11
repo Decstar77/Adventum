@@ -157,8 +157,10 @@ World :: struct {
 
 	// Sound effects queued by simulation code (turrets firing, enemies dying,
 	// tiles being destroyed). `game_update_and_render` drains this each frame
-	// and forwards the events to `Platform.play_sound`.
-	sound_queue:   [dynamic]Sound,
+	// and forwards the events to `Platform.play_sound` / `play_sound_at`. A
+	// queued entry without `has_pos` plays unpositioned (UI-like); with one,
+	// the host attenuates and pans by distance from the current listener.
+	sound_queue:   [dynamic]Queued_Sound,
 
 	// Core ability cooldowns (seconds remaining; 0 == ready). EMP doubles as a
 	// world-wide "enemies are frozen" timer in `emp_time`.
@@ -179,8 +181,20 @@ EMP_SCRAP_COST   :: i32(8)
 EMP_COOLDOWN     :: f32(40)
 EMP_DURATION     :: f32(5)
 
+Queued_Sound :: struct {
+	kind:    Sound,
+	pos:     [2]f32,
+	has_pos: bool,
+}
+
 world_queue_sound :: proc(w: ^World, s: Sound) {
-	append(&w.sound_queue, s)
+	append(&w.sound_queue, Queued_Sound{kind = s})
+}
+
+// Positional variant — the per-frame drain forwards (pos.x, pos.y) to the host
+// so the underlying audio engine pans/attenuates by distance to the listener.
+world_queue_sound_at :: proc(w: ^World, s: Sound, pos: [2]f32) {
+	append(&w.sound_queue, Queued_Sound{kind = s, pos = pos, has_pos = true})
 }
 
 world_init :: proc(w: ^World) {
@@ -256,7 +270,7 @@ world_place :: proc(w: ^World, c: Hex_Coord, kind: Tile_Kind) -> bool {
 	}
 	w.tiles[c] = tile
 	w.path_dirty = true
-	world_queue_sound(w, .Place_Building)
+	world_queue_sound_at(w, .Place_Building, hex_to_pixel(c))
 	return true
 }
 
@@ -353,7 +367,7 @@ world_use_bomb :: proc(w: ^World, pos: [2]f32) -> bool {
 		if dx*dx + dy*dy <= r2 do e.hp -= BOMB_DAMAGE
 	}
 	fx_emit_bomb(w, pos)
-	world_queue_sound(w, .Building_Explode)
+	world_queue_sound_at(w, .Building_Explode, pos)
 	return true
 }
 

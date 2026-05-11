@@ -105,6 +105,7 @@ main :: proc() {
 		toggle_fullscreen   = plat_toggle_fullscreen,
 		request_quit        = plat_request_quit,
 		play_sound          = plat_play_sound,
+		play_sound_at       = plat_play_sound_at,
 	}
 
 	g: game.Game
@@ -171,8 +172,12 @@ main :: proc() {
 
 		// The game writes its current master volume into the platform each
 		// frame; mirror it into the audio engine so the pause-menu slider
-		// updates immediately.
+		// updates immediately. Also push the listener position so positional
+		// plays from this frame's queue pan/attenuate against the latest
+		// camera, and sweep any finished positional instances.
 		audio_set_master_volume(&app.audio, platform.master_volume)
+		audio_set_listener(&app.audio, platform.listener_x, platform.listener_y)
+		audio_tick(&app.audio)
 
 		gfx_end(&app.graphics)
 		free_all(context.temp_allocator)
@@ -360,4 +365,9 @@ plat_request_quit :: proc(p: ^game.Platform) {
 @(private="file")
 plat_play_sound :: proc(p: ^game.Platform, sound: game.Sound) {
 	audio_play(&app_of(p).audio, sound)
+}
+
+@(private="file")
+plat_play_sound_at :: proc(p: ^game.Platform, sound: game.Sound, x, y: f32) {
+	audio_play_at(&app_of(p).audio, sound, x, y)
 }

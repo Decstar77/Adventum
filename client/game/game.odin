@@ -220,6 +220,14 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	// frame (button clicks, simulation events) play at the right level.
 	p.master_volume = g.volume
 
+	// Listener position: the camera centre, in the same world-pixel space the
+	// simulation queues sounds in. Zoom is deliberately ignored — the audio
+	// "ear" stays at fixed scale even when the player zooms out, which keeps
+	// the panning intuitive (a sound at the right edge of the screen still
+	// reads as "to the right") regardless of how much world is on screen.
+	p.listener_x = g.cam.pos.x
+	p.listener_y = g.cam.pos.y
+
 	// FPS readout (rolling, updated 4×/sec).
 	g.fps_accum += dt
 	g.fps_frames += 1
@@ -365,17 +373,29 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		}
 	}
 
-	// Flush the simulation's queued sounds. We collapse a frame's queue to at
-	// most one play per family — eighteen turrets firing on the same tick stop
-	// sounding like a wall of noise; the player still hears "shot" once. The
-	// host-side per-family cooldown extends the same protection across
-	// adjacent frames. Done regardless of pause: the queue is empty on a
-	// paused frame anyway.
-	seen: [Sound]bool
-	for s in g.world.sound_queue {
-		if seen[s] do continue
-		seen[s] = true
-		p->play_sound(s)
+	// Flush the simulation's queued sounds. Positional entries are forwarded
+	// to `play_sound_at` so the host can pan/attenuate; non-positional ones
+	// (UI cues, EMP cast) go to `play_sound`. We cap how many *positional*
+	// plays per family fire in one frame — eighteen turrets firing on the
+	// same tick used to be a wall of noise; now we play at most a couple so
+	// spatial diversity remains while bounded. UI / non-positional families
+	// collapse to one play per frame as before. Even with this cap the host
+	// applies its own per-family cooldown + concurrent-voice cap, so the
+	// effective rate per family is much lower than `LIMIT × fps` would
+	// suggest.
+	POSITIONAL_PER_FAMILY_LIMIT :: 2
+	pos_count:    [Sound]i32
+	seen_nonpos:  [Sound]bool
+	for q in g.world.sound_queue {
+		if q.has_pos {
+			if pos_count[q.kind] >= POSITIONAL_PER_FAMILY_LIMIT do continue
+			pos_count[q.kind] += 1
+			p->play_sound_at(q.kind, q.pos.x, q.pos.y)
+		} else {
+			if seen_nonpos[q.kind] do continue
+			seen_nonpos[q.kind] = true
+			p->play_sound(q.kind)
+		}
 	}
 	clear(&g.world.sound_queue)
 

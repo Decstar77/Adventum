@@ -241,7 +241,7 @@ enemies_update :: proc(w: ^World, dt: f32) {
 							life   = SPITTER_PROJ_LIFE,
 							target = target,
 						})
-						world_queue_sound(w, .Enemy_Attack)
+						world_queue_sound_at(w, .Enemy_Attack, e.pos)
 						e.attack_cd = SPITTER_FIRE_INTERVAL
 					}
 				} else {
@@ -257,11 +257,11 @@ enemies_update :: proc(w: ^World, dt: f32) {
 					// per attacking enemy so dense swarms don't drown the screen.
 					if rand.float32() < dt * 6 {
 						fx_emit_enemy_attack(w, contact, dir)
-						world_queue_sound(w, .Enemy_Attack)
+						world_queue_sound_at(w, .Enemy_Attack, contact)
 					}
 					if tile.hp <= 0 && tile.kind != .Core {
 						fx_emit_tile_destroyed(w, center, tile.kind)
-						world_queue_sound(w, .Building_Explode)
+						world_queue_sound_at(w, .Building_Explode, center)
 						world_remove(w, target)
 					} else {
 						w.tiles[target] = tile
@@ -301,7 +301,7 @@ enemy_projectiles_update :: proc(w: ^World, dt: f32) {
 				tile.hp -= ep.dmg
 				if tile.hp <= 0 && tile.kind != .Core {
 					fx_emit_tile_destroyed(w, center, tile.kind)
-					world_queue_sound(w, .Building_Explode)
+					world_queue_sound_at(w, .Building_Explode, center)
 					world_remove(w, ep.target)
 				} else {
 					w.tiles[ep.target] = tile

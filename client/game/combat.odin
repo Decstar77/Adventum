@@ -116,7 +116,7 @@ turrets_fire :: proc(w: ^World, dt: f32) {
 					fire_bullet(w, origin, t.aim_angle + math.PI, dmg)
 				}
 				t.cooldown = TURRET_FIRE_INTERVAL
-				world_queue_sound(w, .Turret_Shoot)
+				world_queue_sound_at(w, .Turret_Shoot, origin)
 			}
 		}
 
@@ -175,7 +175,7 @@ sweep_dead_enemies :: proc(w: ^World) {
 			dead := w.enemies[i]
 			fx_emit_enemy_death(w, dead.pos, dead.kind)
 			w.scrap += scrap_for_kind(dead.kind)
-			world_queue_sound(w, .Enemy_Die)
+			world_queue_sound_at(w, .Enemy_Die, dead.pos)
 			unordered_remove(&w.enemies, i)
 			// Swarmer split: paint the shockwave first, then drop crawlers
 			// radially around the death position so they don't stack into a
@@ -259,7 +259,7 @@ mortars_fire :: proc(w: ^World, dt: f32) {
 				})
 				fx_emit_muzzle(w, muzzle, t.aim_angle)
 				t.cooldown = MORTAR_FIRE_INTERVAL
-				world_queue_sound(w, .Turret_Shoot)
+				world_queue_sound_at(w, .Turret_Shoot, origin)
 			}
 		}
 		w.tiles[coord] = t

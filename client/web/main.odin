@@ -32,6 +32,8 @@ foreign host {
 	// HTMLAudioElement is sufficient for fire-and-forget SFX and avoids pulling
 	// the C library through emscripten.
 	js_play_sound        :: proc(sound: i32) ---
+	js_play_sound_at     :: proc(sound: i32, x, y: f32) ---
+	js_set_listener      :: proc(x, y: f32) ---
 	js_set_master_volume :: proc(v: f32) ---
 	// Fog-of-war lights drive the background shader (host.js renderBackground).
 	// World-space coordinates; the host transforms them with the latched
@@ -96,8 +98,10 @@ web_frame :: proc "c" (
 	game.game_update_and_render(&g_game, &g_platform)
 
 	// Mirror the game's current volume into the JS host so the slider drives
-	// the audio level without any extra plumbing.
+	// the audio level without any extra plumbing. Listener position pairs
+	// with `js_play_sound_at` for spatial panning/attenuation.
 	js_set_master_volume(g_platform.master_volume)
+	js_set_listener(g_platform.listener_x, g_platform.listener_y)
 
 	// Edge-detect at end of frame: events that arrive between frames update
 	// keys_down only — keys_was_down still reflects last frame, so the first
@@ -126,12 +130,18 @@ make_platform :: proc() -> game.Platform {
 		toggle_fullscreen   = plat_toggle_fullscreen,
 		request_quit        = plat_request_quit,
 		play_sound          = plat_play_sound,
+		play_sound_at       = plat_play_sound_at,
 	}
 }
 
 @(private="file")
 plat_play_sound :: proc(p: ^game.Platform, sound: game.Sound) {
 	js_play_sound(i32(sound))
+}
+
+@(private="file")
+plat_play_sound_at :: proc(p: ^game.Platform, sound: game.Sound, x, y: f32) {
+	js_play_sound_at(i32(sound), x, y)
 }
 
 @(private="file")
