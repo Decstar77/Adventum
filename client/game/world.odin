@@ -170,6 +170,13 @@ World :: struct {
 	bomb_cooldown: f32,
 	emp_cooldown:  f32,
 	emp_time:      f32,
+
+	// Set to true by `flaks_fire` on any frame at least one flak gun emitted a
+	// bullet (i.e. it was energized, had a flyer in range, and finished its
+	// cooldown). `game_update_and_render` reads this each frame to drive the
+	// looped flak-cannon sound on the host. Reset to false at the top of each
+	// `flaks_fire` call so a frame with no firing flaks naturally turns it off.
+	flak_firing:   bool,
 }
 
 // Ability tuning. Both abilities cost food + scrap and share a cooldown each.

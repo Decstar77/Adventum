@@ -26,6 +26,11 @@ Sound :: enum {
 	Turret_Shoot,
 	Enemy_Attack,
 	Enemy_Die,
+	// Looping family — driven by `set_sound_loop` rather than `play_sound`. The
+	// underlying wav is designed as a continuous spray, so the host plays a
+	// single looped instance that the game toggles on while any flak gun is
+	// actively firing and off the moment they all stop.
+	Flak_Cannon_Loop,
 }
 
 Key :: enum {
@@ -97,4 +102,8 @@ Platform :: struct {
 	listener_y:     f32,
 	play_sound:     proc(p: ^Platform, sound: Sound),
 	play_sound_at:  proc(p: ^Platform, sound: Sound, x, y: f32),
+	// Toggle a looping sound on/off. Idempotent on both edges: calling with the
+	// state the loop is already in is a no-op, so the game can drive this from
+	// a per-frame "is anything still firing?" boolean without bookkeeping.
+	set_sound_loop: proc(p: ^Platform, sound: Sound, active: bool),
 }

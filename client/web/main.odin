@@ -33,6 +33,7 @@ foreign host {
 	// the C library through emscripten.
 	js_play_sound        :: proc(sound: i32) ---
 	js_play_sound_at     :: proc(sound: i32, x, y: f32) ---
+	js_set_sound_loop    :: proc(sound: i32, active: i32) ---
 	js_set_listener      :: proc(x, y: f32) ---
 	js_set_master_volume :: proc(v: f32) ---
 	// Fog-of-war lights drive the background shader (host.js renderBackground).
@@ -131,6 +132,7 @@ make_platform :: proc() -> game.Platform {
 		request_quit        = plat_request_quit,
 		play_sound          = plat_play_sound,
 		play_sound_at       = plat_play_sound_at,
+		set_sound_loop      = plat_set_sound_loop,
 	}
 }
 
@@ -142,6 +144,11 @@ plat_play_sound :: proc(p: ^game.Platform, sound: game.Sound) {
 @(private="file")
 plat_play_sound_at :: proc(p: ^game.Platform, sound: game.Sound, x, y: f32) {
 	js_play_sound_at(i32(sound), x, y)
+}
+
+@(private="file")
+plat_set_sound_loop :: proc(p: ^game.Platform, sound: game.Sound, active: bool) {
+	js_set_sound_loop(i32(sound), active ? 1 : 0)
 }
 
 @(private="file")

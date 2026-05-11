@@ -380,7 +380,17 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		if c, ok := g.world.tiles[g.world.core]; ok {
 			if c.hp <= 0 do g.world.game_over = true
 		}
+	} else {
+		// While paused / game-over `flaks_fire` doesn't run, so its per-frame
+		// reset never happens. Force the engaged flag down so the looped audio
+		// definitely stops the moment gameplay halts.
+		g.world.flak_firing = false
 	}
+
+	// Drive the looped flak-cannon SFX. Idempotent on both edges — the host
+	// only starts/stops the underlying voice on a transition, so calling this
+	// every frame is cheap.
+	p->set_sound_loop(.Flak_Cannon_Loop, g.world.flak_firing)
 
 	// Flush the simulation's queued sounds. Positional entries are forwarded
 	// to `play_sound_at` so the host can pan/attenuate; non-positional ones

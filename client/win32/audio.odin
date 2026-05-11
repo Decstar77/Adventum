@@ -44,6 +44,7 @@ SOUND_MIN_INTERVAL := [game.Sound]time.Duration{
 	.Turret_Shoot     = 110 * time.Millisecond,
 	.Enemy_Attack     = 140 * time.Millisecond,
 	.Enemy_Die        = 110 * time.Millisecond,
+	.Flak_Cannon_Loop = 0,
 }
 
 // Maximum concurrent *positional* voices per family. If this many copies are
@@ -59,6 +60,7 @@ SOUND_MAX_VOICES := [game.Sound]i32{
 	.Turret_Shoot     = 3,
 	.Enemy_Attack     = 2,
 	.Enemy_Die        = 2,
+	.Flak_Cannon_Loop = 0, // managed via set_sound_loop, not the active-voice pool
 }
 
 // Variants per family. Order matches `res/sounds/`; randomly sampled at play.
@@ -70,9 +72,9 @@ SOUND_FILES := [game.Sound][]string{
 	.Place_Building   = {"res/sounds/place_building_1.wav", "res/sounds/place_building_2.wav"},
 	.Building_Explode = {"res/sounds/building-explode.wav"},
 	.Turret_Shoot     = {
-		"res/sounds/turret_shoot-01.wav",
-		"res/sounds/turret_shoot-02.wav",
-		"res/sounds/turret_shoot-03.wav",
+		"res/sounds/blue_laser_1.wav",
+		"res/sounds/blue_laser_2.wav",
+		"res/sounds/blue_laser_3.wav",
 	},
 	.Enemy_Attack     = {
 		"res/sounds/enemy-attack-01.wav",
@@ -86,6 +88,7 @@ SOUND_FILES := [game.Sound][]string{
 		"res/sounds/enemy-die-02.wav",
 		"res/sounds/enemy-die-03.wav",
 	},
+	.Flak_Cannon_Loop = {"res/sounds/flack_cannon.wav"},
 }
 
 // Pixels per audio unit. One hex pitch (1.5 × HEX_SIZE = 72) is a reasonable
@@ -114,6 +117,9 @@ Audio :: struct {
 	// we sweep these once per frame and uninit + free any that have reached
 	// their end. Per-family count is the concurrent-voice cap input.
 	active:      [dynamic]Active_Voice,
+	// Looped voices, one per family. Started/stopped on transition by
+	// `audio_set_loop`; null entries mean "not currently playing".
+	loops:       [game.Sound]^ma.sound,
 }
 
 audio_init :: proc(a: ^Audio) -> bool {
@@ -139,6 +145,13 @@ audio_shutdown :: proc(a: ^Audio) {
 		free(v.sound)
 	}
 	delete(a.active)
+	// Tear down any still-running looped voices.
+	for s, kind in a.loops {
+		if s == nil do continue
+		ma.sound_uninit(s)
+		free(s)
+		a.loops[kind] = nil
+	}
 	ma.engine_uninit(&a.engine)
 	for variants in &a.cpaths {
 		for cs in variants do delete(cs)
@@ -187,6 +200,39 @@ pick_variant :: proc(variants: [dynamic]cstring) -> (cstring, bool) {
 	if len(variants) == 0 do return nil, false
 	idx := 0 if len(variants) == 1 else rand.int_max(len(variants))
 	return variants[idx], true
+}
+
+// Start or stop a single looped, non-spatial voice for `sound`. Idempotent on
+// both edges so the game can drive this from a per-frame "is anything still
+// firing?" bool without tracking transitions. The looped instance plays
+// through the engine listener at full volume (no attenuation) — it's an
+// environmental layer, not a positional effect.
+audio_set_loop :: proc(a: ^Audio, sound: game.Sound, active: bool) {
+	if !a.ready do return
+	playing := a.loops[sound] != nil
+	if active == playing do return
+	if active {
+		path, ok := pick_variant(a.cpaths[sound])
+		if !ok do return
+		s := new(ma.sound)
+		flags := ma.sound_flags{.NO_PITCH, .NO_SPATIALIZATION}
+		if res := ma.sound_init_from_file(&a.engine, path, flags, nil, nil, s); res != .SUCCESS {
+			free(s)
+			return
+		}
+		ma.sound_set_looping(s, true)
+		if res := ma.sound_start(s); res != .SUCCESS {
+			ma.sound_uninit(s)
+			free(s)
+			return
+		}
+		a.loops[sound] = s
+	} else {
+		s := a.loops[sound]
+		ma.sound_uninit(s)
+		free(s)
+		a.loops[sound] = nil
+	}
 }
 
 // Non-spatial play. Honors the per-family cooldown table.

@@ -106,6 +106,7 @@ main :: proc() {
 		request_quit        = plat_request_quit,
 		play_sound          = plat_play_sound,
 		play_sound_at       = plat_play_sound_at,
+		set_sound_loop      = plat_set_sound_loop,
 	}
 
 	g: game.Game
@@ -375,4 +376,9 @@ plat_play_sound :: proc(p: ^game.Platform, sound: game.Sound) {
 @(private="file")
 plat_play_sound_at :: proc(p: ^game.Platform, sound: game.Sound, x, y: f32) {
 	audio_play_at(&app_of(p).audio, sound, x, y)
+}
+
+@(private="file")
+plat_set_sound_loop :: proc(p: ^game.Platform, sound: game.Sound, active: bool) {
+	audio_set_loop(&app_of(p).audio, sound, active)
 }

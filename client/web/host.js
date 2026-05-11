@@ -207,9 +207,9 @@ const SOUND_FILES = [
 	['res/sounds/place_building_1.wav',
 	 'res/sounds/place_building_2.wav'],                   // Place_Building
 	['res/sounds/building-explode.wav'],                   // Building_Explode
-	['res/sounds/turret_shoot-01.wav',
-	 'res/sounds/turret_shoot-02.wav',
-	 'res/sounds/turret_shoot-03.wav'],                    // Turret_Shoot
+	['res/sounds/blue_laser_1.wav',
+	 'res/sounds/blue_laser_2.wav',
+	 'res/sounds/blue_laser_3.wav'],                    // Turret_Shoot
 	['res/sounds/enemy-attack-01.wav',
 	 'res/sounds/enemy-attack-02.wav',
 	 'res/sounds/enemy-attack-03.wav',
@@ -473,6 +473,7 @@ const host = {
 	js_request_quit: () => { window.close(); },
 	js_play_sound:        (sound) => { playSound(sound); },
 	js_play_sound_at:     (sound, x, y) => { playSoundAt(sound, x, y); },
+	js_set_sound_loop:    (sound, active) => { if (typeof setSoundLoop === "function") setSoundLoop(sound, active !== 0); },
 	js_set_listener:      (x, y) => { setListener(x, y); },
 	js_set_master_volume: (v)     => {
 		masterVolume = Math.max(0, Math.min(1, v));

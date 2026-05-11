@@ -327,6 +327,7 @@ nearest_flyer_in_range :: proc(w: ^World, from: [2]f32, range: f32) -> int {
 // targets and emitting `air_only` projectiles so the spray never lands on
 // ground enemies that happen to drift through it.
 flaks_fire :: proc(w: ^World, dt: f32) {
+	w.flak_firing = false
 	for coord, tile in w.tiles {
 		if tile.kind != .Flak do continue
 		t := tile
@@ -357,6 +358,13 @@ flaks_fire :: proc(w: ^World, dt: f32) {
 			if t.cooldown < 0 do t.cooldown = 0
 		}
 
+		// "Actively engaging" — used to drive the looped flak-cannon SFX. Held
+		// true between trigger pulls so the audio doesn't strobe on/off at the
+		// per-shot cadence; goes false the instant the gun loses target or
+		// power.
+		if t.energized && has_target {
+			w.flak_firing = true
+		}
 		if t.energized && t.cooldown <= 0 && has_target {
 			if abs(shortest_angle_diff(t.aim_angle, target_angle)) <= FLAK_AIM_TOLERANCE {
 				// Random spread per bullet so the stream visually fans out.
@@ -377,7 +385,9 @@ flaks_fire :: proc(w: ^World, dt: f32) {
 				})
 				fx_emit_muzzle(w, muzzle, angle)
 				t.cooldown = FLAK_FIRE_INTERVAL
-				world_queue_sound_at(w, .Turret_Shoot, origin)
+				// No per-shot SFX — the looped flak_cannon.wav (driven by
+				// `flak_firing` below) carries the audio for the spray.
+				w.flak_firing = true
 			}
 		}
 
