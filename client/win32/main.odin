@@ -345,16 +345,20 @@ plat_toggle_fullscreen :: proc(p: ^game.Platform) {
 		a.windowed_w, a.windowed_h = glfw.GetWindowSize(a.window)
 		mon := glfw.GetPrimaryMonitor()
 		vm  := glfw.GetVideoMode(mon)
-		if mon != nil && vm != nil {
-			glfw.SetWindowMonitor(a.window, mon, 0, 0, vm.width, vm.height, vm.refresh_rate)
-			a.is_fullscreen = true
-			renderer_recreate_swapchain(&a.renderer)
-		}
+		if mon == nil || vm == nil do return
+		glfw.SetWindowMonitor(a.window, mon, 0, 0, vm.width, vm.height, vm.refresh_rate)
+		a.is_fullscreen = true
 	} else {
 		glfw.SetWindowMonitor(a.window, nil, a.windowed_x, a.windowed_y, a.windowed_w, a.windowed_h, 0)
 		a.is_fullscreen = false
-		renderer_recreate_swapchain(&a.renderer)
 	}
+	// Defer the swapchain rebuild to the next `renderer_begin_frame`. Doing it
+	// inline here is racy: SetWindowMonitor's WM_SIZE has only just been
+	// dispatched, and on some drivers the surface caps it returns right now
+	// still describe the previous mode. The renderer treats `swapchain_dirty`
+	// as a "skip one frame, rebuild, try again" signal — that frame's
+	// PollEvents at the top of the loop is what flushes the size message.
+	a.renderer.swapchain_dirty = true
 }
 
 @(private="file")

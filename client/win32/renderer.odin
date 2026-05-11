@@ -32,6 +32,11 @@ Renderer :: struct {
 	current_frame:        u32,
 	current_image_index:  u32,
 	clear_color:          [4]f32,
+	// Set by the fullscreen toggle (or any external "the surface just changed"
+	// event). Honoured at the top of `renderer_begin_frame` so the rebuild
+	// happens at a known synchronisation point — never while the caller might
+	// still be mid-frame.
+	swapchain_dirty:      bool,
 }
 
 vk_check :: proc(r: vk.Result, where_: string, loc := #caller_location) -> bool {
@@ -77,6 +82,11 @@ renderer_recreate_swapchain :: proc(r: ^Renderer) -> bool {
 	}
 	vk.DeviceWaitIdle(r.device)
 
+	// Tear down everything that views the old swapchain images, but keep the
+	// old swapchain handle alive so the driver can hand off presentation state
+	// to its replacement (the `oldSwapchain` hint in CreateSwapchainKHR). On
+	// Windows this is the difference between a clean fullscreen toggle and the
+	// first few frames being silently dropped/black on some drivers.
 	for fb in r.framebuffers do vk.DestroyFramebuffer(r.device, fb, nil)
 	delete(r.framebuffers)
 	r.framebuffers = nil
@@ -85,14 +95,14 @@ renderer_recreate_swapchain :: proc(r: ^Renderer) -> bool {
 	r.swapchain_views = nil
 	delete(r.swapchain_images)
 	r.swapchain_images = nil
-	if r.swapchain != 0 {
-		vk.DestroySwapchainKHR(r.device, r.swapchain, nil)
-		r.swapchain = 0
-	}
 
-	if !create_swapchain(r) do return false
+	old := r.swapchain
+	r.swapchain = 0
+	if !create_swapchain(r, old) do return false
+	if old != 0 do vk.DestroySwapchainKHR(r.device, old, nil)
 	if !create_image_views(r) do return false
 	if !create_framebuffers(r) do return false
+	r.swapchain_dirty = false
 	return true
 }
 
@@ -119,6 +129,15 @@ renderer_shutdown :: proc(r: ^Renderer) {
 }
 
 renderer_begin_frame :: proc(r: ^Renderer) -> (cb: vk.CommandBuffer, ok: bool) {
+	// External signal (fullscreen toggle) that the surface configuration
+	// changed and the swapchain must be rebuilt before we touch any of its
+	// images. Doing it here rather than mid-toggle keeps the rebuild on the
+	// same thread/timing as every other Vulkan operation we issue.
+	if r.swapchain_dirty {
+		renderer_recreate_swapchain(r)
+		return cb, false
+	}
+
 	frame := r.current_frame
 	vk.WaitForFences(r.device, 1, &r.in_flight_fences[frame], true, max(u64))
 
@@ -329,7 +348,7 @@ create_logical_device :: proc(r: ^Renderer) -> bool {
 	return true
 }
 
-create_swapchain :: proc(r: ^Renderer) -> bool {
+create_swapchain :: proc(r: ^Renderer, old_swapchain: vk.SwapchainKHR = 0) -> bool {
 	caps: vk.SurfaceCapabilitiesKHR
 	vk.GetPhysicalDeviceSurfaceCapabilitiesKHR(r.physical_device, r.surface, &caps)
 
@@ -386,6 +405,7 @@ create_swapchain :: proc(r: ^Renderer) -> bool {
 		compositeAlpha   = {.OPAQUE},
 		presentMode      = present_mode,
 		clipped          = true,
+		oldSwapchain     = old_swapchain,
 	}
 
 	indices := [2]u32{r.graphics_family, r.present_family}

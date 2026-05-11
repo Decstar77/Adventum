@@ -80,13 +80,25 @@ surge_composition :: proc(index: i32) -> (crawlers, brutes, spitters, swarmers: 
 	// players who died on wave 1 never saw them at all.
 
 	crawlers = 8 + index * 2
-	if ( index >= 4 ) {
-		// Time to up the ante
+	if ( index >= 3 ) {
 		crawlers = 8 + i32( math.pow( f64(index), 2 ) )
 	}
 
-	brutes   = 2 + index * 2
-	spitters = 2 + index
+	brutes = 0;
+	if ( index >= 1 ) {
+		brutes = 2 + index * 2
+		if ( index >= 4 ) {
+			brutes = 4 + i32( math.pow( f64(index), 2 ) )
+		}
+	}
+	spitters = 0;
+	if ( index >= 1 ) {
+		spitters = 2 + index
+		if ( index >= 4 ) {
+			spitters =  3 + i32( math.pow( f64(index), 2 ) )
+		}
+	}
+	
 	// Swarmers start at surge 1 (each splits into 2 crawlers, so we ramp slow
 	// to avoid runaway populations from chained splits).
 	if index >= 1 do swarmers = 1 + (index - 1) / 2
