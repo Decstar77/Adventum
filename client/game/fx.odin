@@ -54,6 +54,33 @@ fx_emit_muzzle :: proc(w: ^World, pos: [2]f32, angle: f32) {
 	}
 }
 
+// Soft warm contrail behind a Flyer. Lives long enough to leave a readable
+// arc on the player's screen as the flyer banks, and fades through orange so
+// it visually reads as exhaust rather than a duplicate of the yellow body.
+fx_emit_flyer_trail :: proc(w: ^World, pos: [2]f32) {
+	emit(w, Particle{
+		pos      = pos,
+		vel      = {0, 0},
+		life     = 0.42,
+		max_life = 0.42,
+		r0       = 3.4,
+		r1       = 0,
+		color    = {1.0, 0.78, 0.30, 0.85},
+		drag     = 0,
+	})
+	// Tiny core highlight on top so the start of the trail pops bright.
+	emit(w, Particle{
+		pos      = pos,
+		vel      = {0, 0},
+		life     = 0.14,
+		max_life = 0.14,
+		r0       = 2.0,
+		r1       = 0,
+		color    = {1.0, 0.96, 0.70, 0.95},
+		drag     = 0,
+	})
+}
+
 fx_emit_projectile_trail :: proc(w: ^World, pos: [2]f32) {
 	emit(w, Particle{
 		pos      = pos,
@@ -206,6 +233,12 @@ fx_emit_enemy_death :: proc(w: ^World, pos: [2]f32, kind: Enemy_Kind) {
 		core_color  = {1.0, 0.85, 0.95, 1}
 		chunk_color = {0.690, 0.137, 0.557, 1}
 		count = 16
+	case .Flyer:
+		// Yellow burst — matches the triangle's body palette so the kill reads
+		// as "the yellow thing exploded".
+		core_color  = {1.00, 0.96, 0.65, 1}
+		chunk_color = {0.98, 0.78, 0.18, 1}
+		count = 14
 	}
 	// Central flash.
 	emit(w, Particle{

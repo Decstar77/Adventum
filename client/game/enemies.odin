@@ -11,7 +11,17 @@ Enemy_Kind :: enum {
 	Brute,
 	Spitter,
 	Swarmer,
+	Flyer,
 }
+
+// Flyer tuning. Flyers never stop moving — they fly in `heading` direction at
+// constant speed, banking toward their current target with a capped turn rate
+// so the path arcs instead of snapping. They ignore tile collision (path field
+// and hex boundaries are irrelevant), and chip whatever tile they're closest
+// to whenever they pass within `FLYER_ATTACK_DIST` of its centre.
+FLYER_TURN_RATE     :: f32(2.2)
+FLYER_ATTACK_DIST   :: f32(34)
+FLYER_TRAIL_RATE    :: f32(70)   // particles/sec while alive
 
 // On death, a Swarmer splits into this many baby Crawlers spawned at its
 // position. Keeps the on-death surge readable without ballooning enemy counts.
@@ -26,6 +36,13 @@ Enemy :: struct {
 	// seconds). Melee kinds leave it at zero — their damage is applied
 	// continuously in `enemies_update`.
 	attack_cd:   f32,
+	// Flyer-only: current heading in radians (atan2 convention). Other kinds
+	// leave this at zero; it's overwritten on spawn for flyers so they begin
+	// pointing at the world centre instead of "east".
+	heading:     f32,
+	// Trickle accumulator used by Flyer to emit a steady contrail without
+	// dumping a particle every frame regardless of dt.
+	trail_acc:   f32,
 }
 
 // Spitter projectile tuning. Slower than turret bullets so the player can
@@ -59,6 +76,7 @@ enemy_stats :: proc(kind: Enemy_Kind) -> (hp, speed, dmg: f32) {
 	case .Brute:   return 100, 35, 30
 	case .Spitter: return 30, 55, 14
 	case .Swarmer: return 35, 65, 8
+	case .Flyer:   return 30, 130, 10
 	}
 	return 0, 0, 0
 }
@@ -69,6 +87,7 @@ enemy_attack_range :: proc(kind: Enemy_Kind) -> f32 {
 	switch kind {
 	case .Crawler, .Brute, .Swarmer: return 0
 	case .Spitter:                   return 70
+	case .Flyer:                     return 0
 	}
 	return 0
 }
@@ -79,6 +98,7 @@ enemy_kind_name :: proc(kind: Enemy_Kind) -> string {
 	case .Brute:   return "Brute"
 	case .Spitter: return "Spitter"
 	case .Swarmer: return "Swarmer"
+	case .Flyer:   return "Flyer"
 	}
 	return "?"
 }
@@ -156,8 +176,8 @@ build_path_field :: proc(w: ^World, field: ^Path_Field, weights: Pathing_Weights
 
 enemy_field_for :: proc(w: ^World, kind: Enemy_Kind) -> ^Path_Field {
 	switch kind {
-	case .Crawler, .Spitter, .Swarmer: return &w.field_crawler
-	case .Brute:                       return &w.field_brute
+	case .Crawler, .Spitter, .Swarmer, .Flyer: return &w.field_crawler
+	case .Brute:                               return &w.field_brute
 	}
 	return &w.field_crawler
 }
@@ -169,10 +189,58 @@ enemy_spawn :: proc(w: ^World, kind: Enemy_Kind) {
 		math.sin(angle) * ENEMY_SPAWN_RADIUS,
 	}
 	hp, _, _ := enemy_stats(kind)
-	append(&w.enemies, Enemy{kind = kind, pos = pos, hp = hp})
+	e := Enemy{kind = kind, pos = pos, hp = hp}
+	// Flyers spawn already pointing roughly toward the core so their first
+	// arc isn't an awkward 180° flip; the turn-rate limit will refine from
+	// there once they pick a real target.
+	if kind == .Flyer {
+		e.heading = math.atan2(-pos.y, -pos.x)
+	}
+	append(&w.enemies, e)
 }
 
 ENEMY_BODY_RADIUS :: f32(10)
+
+// Flyer target priority: nearest of (Farm, Generator) first; if there are no
+// farms or generators left, fall back to the nearest non-Wall tile (so the
+// Core, turrets, mortars, relays, and flak guns all become valid prey, but
+// walls stay ignored — they're not the point of an air raid). Returns the
+// world.tiles key plus an `ok` flag; if no tile qualifies the flyer just
+// drifts toward the core position in `enemies_update`.
+@(private="file")
+flyer_pick_target :: proc(w: ^World, from: [2]f32) -> (Hex_Coord, bool) {
+	best:    Hex_Coord
+	best_d2: f32
+	found:   bool
+	// Pass 1: farms + generators.
+	for coord, t in w.tiles {
+		if t.kind != .Farm && t.kind != .Generator do continue
+		center := hex_to_pixel(coord)
+		dx := center.x - from.x
+		dy := center.y - from.y
+		d2 := dx * dx + dy * dy
+		if !found || d2 < best_d2 {
+			best_d2 = d2
+			best    = coord
+			found   = true
+		}
+	}
+	if found do return best, true
+	// Pass 2: everything except walls (Core/Turret/Mortar/Relay/Flak).
+	for coord, t in w.tiles {
+		if t.kind == .Wall do continue
+		center := hex_to_pixel(coord)
+		dx := center.x - from.x
+		dy := center.y - from.y
+		d2 := dx * dx + dy * dy
+		if !found || d2 < best_d2 {
+			best_d2 = d2
+			best    = coord
+			found   = true
+		}
+	}
+	return best, found
+}
 
 @(private="file")
 nearest_tile_to :: proc(w: ^World, from: [2]f32) -> (Hex_Coord, bool) {
@@ -211,6 +279,73 @@ enemies_update :: proc(w: ^World, dt: f32) {
 		if e.attack_cd > 0 {
 			e.attack_cd -= dt
 			if e.attack_cd < 0 do e.attack_cd = 0
+		}
+
+		// Flyers ignore tile collision and never stop — they fly in `heading`
+		// at constant speed, turning toward their current priority target with
+		// a capped turn rate so the path arcs visibly. When they pass close to
+		// a target tile centre they chip it, then sweep past and come around
+		// for another pass.
+		if e.kind == .Flyer {
+			target, has_target := flyer_pick_target(w, e.pos)
+			desired := e.heading
+			if has_target {
+				center := hex_to_pixel(target)
+				desired = math.atan2(center.y - e.pos.y, center.x - e.pos.x)
+			}
+			// Approach heading via the shortest signed delta, clamped to the
+			// per-frame max turn step.
+			diff := desired - e.heading
+			for diff >  math.PI do diff -= 2 * math.PI
+			for diff < -math.PI do diff += 2 * math.PI
+			max_step := FLYER_TURN_RATE * dt
+			if diff >  max_step do diff =  max_step
+			if diff < -max_step do diff = -max_step
+			e.heading += diff
+			// Always advance — no stopping, no collision check against tiles.
+			e.pos.x += math.cos(e.heading) * speed * dt
+			e.pos.y += math.sin(e.heading) * speed * dt
+
+			// Trail: steady stream of small fading puffs behind the nose,
+			// metered by a per-flyer accumulator so the rate is dt-independent.
+			e.trail_acc += dt * FLYER_TRAIL_RATE
+			for e.trail_acc >= 1 {
+				e.trail_acc -= 1
+				back := [2]f32{
+					e.pos.x - math.cos(e.heading) * 10,
+					e.pos.y - math.sin(e.heading) * 10,
+				}
+				fx_emit_flyer_trail(w, back)
+			}
+
+			// Strafing damage: when within attack distance of the target
+			// centre, bleed HP into the tile and emit the usual chip FX. The
+			// flyer keeps moving past — no stop, just a quick contact.
+			if has_target {
+				if tile, present := w.tiles[target]; present {
+					center := hex_to_pixel(target)
+					dx := center.x - e.pos.x
+					dy := center.y - e.pos.y
+					d  := math.sqrt(dx*dx + dy*dy)
+					if d <= FLYER_ATTACK_DIST {
+						tile.hp -= dmg * dt
+						if rand.float32() < dt * 6 {
+							dir := [2]f32{0, 0}
+							if d > 0.001 do dir = {dx / d, dy / d}
+							fx_emit_enemy_attack(w, e.pos, dir)
+							world_queue_sound_at(w, .Enemy_Attack, e.pos)
+						}
+						if tile.hp <= 0 && tile.kind != .Core {
+							fx_emit_tile_destroyed(w, center, tile.kind)
+							world_queue_sound_at(w, .Building_Explode, center)
+							world_remove(w, target)
+						} else {
+							w.tiles[target] = tile
+						}
+					}
+				}
+			}
+			continue
 		}
 
 		target, ok := nearest_tile_to(w, e.pos)
@@ -362,6 +497,46 @@ enemies_render :: proc(w: ^World, p: ^Platform) {
 			p->draw_circle(e.pos.x, e.pos.y, 9, {0.882, 0.961, 0.933, 1})
 			p->draw_circle(e.pos.x, e.pos.y, 5, {0.114, 0.620, 0.459, 1})
 			draw_health_bar(p, e.pos.x, e.pos.y - 16, 22, e.hp, max_hp)
+		case .Flyer:
+			// Yellow triangle pointing along `heading`. There's no filled-
+			// triangle primitive, so we fake the silhouette with three thick
+			// edge lines plus a darker inset triangle for a bit of depth, and
+			// a small dark dot at the centroid as a "cockpit" tell. Vertex
+			// distances picked so the body reads at the same eye-scale as the
+			// other enemies (~10px radius).
+			body   := [4]f32{0.98, 0.86, 0.22, 1}
+			rim    := [4]f32{0.55, 0.40, 0.05, 1}
+			inset  := [4]f32{0.78, 0.62, 0.10, 1}
+			tip_r   := f32(14)
+			rear_r  := f32(11)
+			rear_a  := f32(2.5)
+			tip := [2]f32{e.pos.x + math.cos(e.heading) * tip_r, e.pos.y + math.sin(e.heading) * tip_r}
+			lr  := [2]f32{
+				e.pos.x + math.cos(e.heading + rear_a) * rear_r,
+				e.pos.y + math.sin(e.heading + rear_a) * rear_r,
+			}
+			rr  := [2]f32{
+				e.pos.x + math.cos(e.heading - rear_a) * rear_r,
+				e.pos.y + math.sin(e.heading - rear_a) * rear_r,
+			}
+			// Thick outer fill (lines overlap into a filled triangle shape).
+			p->draw_line(tip.x, tip.y, lr.x, lr.y, 6, body)
+			p->draw_line(tip.x, tip.y, rr.x, rr.y, 6, body)
+			p->draw_line(lr.x,  lr.y,  rr.x, rr.y, 6, body)
+			// Inset darker triangle pulled in slightly toward the centroid.
+			cx := (tip.x + lr.x + rr.x) / 3
+			cy := (tip.y + lr.y + rr.y) / 3
+			inset_lerp :: proc(a: [2]f32, c: f32, cx, cy: f32) -> [2]f32 {
+				return {a.x + (cx - a.x) * c, a.y + (cy - a.y) * c}
+			}
+			tip2 := inset_lerp(tip, 0.30, cx, cy)
+			lr2  := inset_lerp(lr,  0.30, cx, cy)
+			rr2  := inset_lerp(rr,  0.30, cx, cy)
+			p->draw_line(tip2.x, tip2.y, lr2.x, lr2.y, 3, inset)
+			p->draw_line(tip2.x, tip2.y, rr2.x, rr2.y, 3, inset)
+			p->draw_line(lr2.x,  lr2.y,  rr2.x, rr2.y, 3, inset)
+			p->draw_circle(cx, cy, 2.5, rim)
+			draw_health_bar(p, e.pos.x, e.pos.y - 18, 24, e.hp, max_hp)
 		case .Swarmer:
 			// Magenta cluster — three small lobes around a darker core to
 			// telegraph "this thing breaks apart on death". Tiny offsets keep

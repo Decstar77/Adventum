@@ -1,0 +1,45 @@
+  High-leverage content ideas
+
+  I'd group these by how much new system code they need. The cheapest ones reuse existing tile/enemy machinery.
+
+  1. Spend scrap (almost free — currency already tracked). Pick one of:
+  - Repair: button on selection panel, costs N scrap per HP. Makes Wall stacks sustainable.
+  - Core abilities: one-shot bombs / EMP / mass-repair on cooldown, paid in scrap. Gives scrap a use without adding tile kinds.
+  - Tech tree: persistent run-wide upgrades — "+10% turret damage", "+1 generator radius", "farms produce while damaged". 5–8
+  nodes, scrap-gated.
+
+  2. More tile kinds (slot into Tile_Kind enum, reuse tier/HP/energy machinery). Strongest two:
+  - Mortar — long range, slow fire, AoE, energy-hungry. Counters Spitter standoff.
+  - Slow field / Tesla — energized aura that damages or slows enemies in range. Reuses world_render_selection_influence for the
+  radius preview.
+  - Mine — one-shot consumable, no upkeep, cheap. Fills the early-game "I have food but no power yet" gap.
+  - Storage — raises a food cap (if you add one) or boosts adjacent farm output. Encourages clustering.
+
+  3. More enemy kinds (drop into Enemy_Kind, add stats row, optional new behavior in enemies_update). The existing nearest-tile
+  chase covers most cases:
+  - Sapper — fast, low HP, ignores walls (high wall weight when path field is re-enabled) and dives the Core.
+  - Shielded — flat damage reduction until first hit; punishes single-shot turret spam, rewards Mortar/AoE.
+  - Swarmer — splits into 2 Crawlers on death. Trivial to implement in sweep_dead_enemies.
+  - Flyer — ignores Walls entirely (skip wall cost in path field), forces Turret coverage on flanks.
+  - Boss every 5 surges — single huge unit, scripted by waves.odin. Drops bonus scrap.
+
+  4. Wave structure — currently a flat formula.
+  - Named waves with hand-authored compositions for the first ~10, formula after.
+  - Mini-events between surges: "Convoy" (line of brutes from one direction), "Rain" (spitter cloud), "Silence" (longer gap,
+  more scrap on next wave).
+  - Directional spawning: spawn from one side per wave (enemy_spawn already randomizes angle; gate it). Makes wall placement a
+  real decision instead of 360°-uniform.
+  - Win condition: survive N waves → run ends, stats screen. Right now there's no end-state besides death.
+
+  5. Map content (currently empty disc).
+  - Resource nodes on the hex grid — "Scrap deposit" that a Farm-like "Miner" tile harvests. Gives a reason to expand outward.
+  - Impassable terrain: rocks/water hexes you can't build on but enemies path around. Wire the shrub sprites in as decoration
+  first, then promote some to blockers.
+  - Multiple maps / seeds: pick a layout at start. Same systems, different topology.
+
+  6. Player character (asset already exists). player_idle.png is sitting unused. A controllable avatar that auto-repairs
+  adjacent tiles, or aggros enemies, would distinguish this from "place turrets and wait" — but it's the biggest design swing on
+   this list and would need its own movement/collision.
+
+  7. Audio polish (cheap, big perceived-value win). FMOD bindings exist but aren't wired (per CLAUDE.md). Music tracks per phase
+   (calm / surge / boss), ambient hum that intensifies with enemy count, unique death stings for new enemy kinds.

@@ -226,6 +226,7 @@ glfw_key_to_game :: proc "contextless" (k: i32) -> game.Key {
 	case glfw.KEY_N:           return .N
 	case glfw.KEY_Q:           return .Q
 	case glfw.KEY_E:           return .E
+	case glfw.KEY_F:           return .F
 	case glfw.KEY_1:           return .Num1
 	case glfw.KEY_2:           return .Num2
 	case glfw.KEY_3:           return .Num3

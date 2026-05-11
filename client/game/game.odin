@@ -169,7 +169,7 @@ TICK_DT :: f32(1.0 / TICK_HZ)
 
 @(private="file")
 HOTKEYS := [BUILDABLE_COUNT]Key{
-	.Num1, .Num2, .Num3, .Num4, .Num5, .Num6,
+	.Num1, .Num2, .Num3, .Num4, .Num5, .Num6, .Num7,
 }
 
 game_init :: proc(g: ^Game) {
@@ -326,6 +326,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		if p->is_key_just_pressed(.B) do enemy_spawn(&g.world, .Brute)
 		if p->is_key_just_pressed(.V) do enemy_spawn(&g.world, .Spitter)
 		if p->is_key_just_pressed(.N) do enemy_spawn(&g.world, .Swarmer)
+		if p->is_key_just_pressed(.F) do enemy_spawn(&g.world, .Flyer)
 
 		// Ability hotkeys. Q enters bomb-target mode (acts like Place but for
 		// a one-shot AoE); E fires the EMP instantly. Both gate on the
@@ -369,6 +370,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		waves_update(&g.world, &g.world.waves, dt)
 		turrets_fire(&g.world, dt)
 		mortars_fire(&g.world, dt)
+		flaks_fire(&g.world, dt)
 		projectiles_update(&g.world, dt)
 		enemy_projectiles_update(&g.world, dt)
 		enemies_update(&g.world, dt)
@@ -604,15 +606,16 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	bw := f32(132)
 	bh := picker_h - picker_pad * 2
 	mortar_locked := !mortar_unlocked(&g.world)
+	flak_locked   := !flak_unlocked(&g.world)
 	for i in 0 ..< BUILDABLE_COUNT {
 		kind := Tile_Kind(i)
 		cost := tile_cost(kind)
 		x := bx + f32(i) * (bw + 8)
 		affordable := g.world.food >= cost
-		// Mortar reads as locked until the Core hits the required tier — clicks
-		// are silently consumed so the player can't enter Place mode and stare
-		// at red placement outlines wondering why nothing drops.
-		locked := kind == .Mortar && mortar_locked
+		// Mortar / Flak read as locked until the Core hits the required tier —
+		// clicks are silently consumed so the player can't enter Place mode and
+		// stare at red placement outlines wondering why nothing drops.
+		locked := (kind == .Mortar && mortar_locked) || (kind == .Flak && flak_locked)
 		clicked := ui_button(&g.ui, p, "", x, by, bw, bh)
 		if clicked && !locked {
 			g.selected_kind = kind
@@ -639,7 +642,8 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		if locked {
 			// Tag the slot with the unlock requirement so the lockout reads
 			// as a tier gate rather than just "you're broke".
-			tag := fmt.tprintf("Core T%d", MORTAR_CORE_TIER_REQ)
+			req := kind == .Flak ? FLAK_CORE_TIER_REQ : MORTAR_CORE_TIER_REQ
+			tag := fmt.tprintf("Core T%d", req)
 			tw_tag := p->text_measure(tag, .Small)
 			p->draw_text(x + (bw - tw_tag) * 0.5, by + 14, tag, {0.95, 0.85, 0.55, 1}, .Small)
 		}
@@ -676,16 +680,17 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	// Per-kind tally so a "huge" total can be read at a glance — useful for
 	// spotting trickle pile-up vs. a fresh surge. Hotkeys live on the same row
 	// since they're a debug spawn aid that pairs with the same vocabulary.
-	enemy_crawlers, enemy_brutes, enemy_spitters, enemy_swarmers: i32
+	enemy_crawlers, enemy_brutes, enemy_spitters, enemy_swarmers, enemy_flyers: i32
 	for e in g.world.enemies {
 		switch e.kind {
 		case .Crawler: enemy_crawlers += 1
 		case .Brute:   enemy_brutes   += 1
 		case .Spitter: enemy_spitters += 1
 		case .Swarmer: enemy_swarmers += 1
+		case .Flyer:   enemy_flyers   += 1
 		}
 	}
-	p->draw_text(hud_text_x, y4, fmt.tprintf("%d  (C %d  B %d  V %d  N %d)", len(g.world.enemies), enemy_crawlers, enemy_brutes, enemy_spitters, enemy_swarmers), {0.96, 0.78, 0.78, 1}, .Small)
+	p->draw_text(hud_text_x, y4, fmt.tprintf("%d  (C %d  B %d  V %d  N %d  F %d)", len(g.world.enemies), enemy_crawlers, enemy_brutes, enemy_spitters, enemy_swarmers, enemy_flyers), {0.96, 0.78, 0.78, 1}, .Small)
 
 	// Big timer at top-center.
 	timer_str := fmt.tprintf("%.1fs", g.world.survive_time)

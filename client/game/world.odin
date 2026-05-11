@@ -9,6 +9,7 @@ Tile_Kind :: enum {
 	Wall,
 	Relay,
 	Mortar,
+	Flak,
 	Core,
 }
 
@@ -18,6 +19,8 @@ BUILDABLE_COUNT :: TILE_KIND_COUNT - 1
 
 // Mortar requires the Core to be at least this tier before it can be placed.
 MORTAR_CORE_TIER_REQ :: i32(2)
+// Flak shares the Mortar gate: it's a tier-2-core unlock.
+FLAK_CORE_TIER_REQ   :: i32(2)
 
 // Repair conversion: 1 scrap restores this many HP. Repair is rounded up to
 // whole scrap so a 1-HP top-up still costs at least one scrap.
@@ -39,7 +42,7 @@ Tile :: struct {
 // bumps its survivability.
 tile_max_tier :: proc(kind: Tile_Kind) -> i32 {
 	switch kind {
-	case .Farm, .Generator, .Turret, .Wall, .Relay, .Mortar, .Core: return 3
+	case .Farm, .Generator, .Turret, .Wall, .Relay, .Mortar, .Flak, .Core: return 3
 	}
 	return 1
 }
@@ -226,12 +229,13 @@ tile_cost :: proc(kind: Tile_Kind) -> f32 {
 	case .Wall:      return 5
 	case .Relay:     return 8
 	case .Mortar:    return 30
+	case .Flak:      return 25
 	}
 	return 0
 }
 
 tile_consumes_energy :: proc(kind: Tile_Kind) -> bool {
-	return kind == .Turret || kind == .Mortar
+	return kind == .Turret || kind == .Mortar || kind == .Flak
 }
 
 world_in_build_range :: proc(w: ^World, c: Hex_Coord) -> bool {
@@ -253,11 +257,20 @@ mortar_unlocked :: proc(w: ^World) -> bool {
 	return core.tier >= MORTAR_CORE_TIER_REQ
 }
 
+// Flak follows the same tier-gate pattern as Mortar — a tier-2 Core unlocks it,
+// before that the picker slot reads as locked rather than just unaffordable.
+flak_unlocked :: proc(w: ^World) -> bool {
+	core, ok := w.tiles[w.core]
+	if !ok do return false
+	return core.tier >= FLAK_CORE_TIER_REQ
+}
+
 world_can_place :: proc(w: ^World, c: Hex_Coord, kind: Tile_Kind) -> bool {
 	if kind == .Core do return false
 	if c in w.tiles do return false
 	if w.food < tile_cost(kind) do return false
 	if kind == .Mortar && !mortar_unlocked(w) do return false
+	if kind == .Flak   && !flak_unlocked(w)   do return false
 	return world_in_build_range(w, c)
 }
 
@@ -265,7 +278,7 @@ world_place :: proc(w: ^World, c: Hex_Coord, kind: Tile_Kind) -> bool {
 	if !world_can_place(w, c, kind) do return false
 	w.food -= tile_cost(kind)
 	tile := Tile{kind = kind, tier = 1, hp = tile_max_hp(kind, 1)}
-	if kind == .Turret || kind == .Mortar {
+	if kind == .Turret || kind == .Mortar || kind == .Flak {
 		tile.aim_angle = -math.PI * 0.5 // start pointing up
 	}
 	w.tiles[c] = tile
@@ -405,6 +418,7 @@ tile_max_hp :: proc(kind: Tile_Kind, tier: i32 = 1) -> f32 {
 	case .Wall:      base = 200
 	case .Turret:    base = 80
 	case .Mortar:    base = 70
+	case .Flak:      base = 65
 	case .Generator: base = 60
 	case .Relay:     base = 50
 	case .Farm:      base = 50
@@ -425,7 +439,7 @@ tile_max_hp :: proc(kind: Tile_Kind, tier: i32 = 1) -> f32 {
 		case 2: mult = 1.15
 		case 3: mult = 1.30
 		}
-	case .Turret, .Relay, .Mortar:
+	case .Turret, .Relay, .Mortar, .Flak:
 		switch tier {
 		case 2: mult = 1.20
 		case 3: mult = 1.40
@@ -515,6 +529,7 @@ tile_kind_name :: proc(kind: Tile_Kind) -> string {
 	case .Wall:      return "Wall"
 	case .Relay:     return "Relay"
 	case .Mortar:    return "Mortar"
+	case .Flak:      return "Flak"
 	}
 	return "?"
 }
@@ -537,6 +552,10 @@ tile_color :: proc(kind: Tile_Kind) -> (fill, stroke: [4]f32) {
 		// Dusky violet — distinct from the warm-red Turret palette so the two
 		// firepower tiles read apart at a glance.
 		return {0.918, 0.886, 0.969, 1}, {0.396, 0.255, 0.612, 1}
+	case .Flak:
+		// Warm yellow/amber — matches the Flyer's body palette so the
+		// counter-unit relationship reads at a glance.
+		return {0.996, 0.965, 0.812, 1}, {0.780, 0.580, 0.060, 1}
 	}
 	return {1, 1, 1, 1}, {0, 0, 0, 1}
 }
@@ -646,6 +665,31 @@ draw_tile_icon :: proc(p: ^Platform, cx, cy: f32, kind: Tile_Kind, alpha: f32, a
 		p->draw_line(cx, cy, bx, by, barrel_t, stroke)
 		// Muzzle cap so the silhouette doesn't fade into a stripe at distance.
 		p->draw_circle(bx, by, barrel_t * 0.55, stroke)
+
+	case .Flak:
+		// Anti-air gun silhouette: yellow base disc, dual short barrels angled
+		// along `aim_angle` to telegraph "spray". Tier scales barrel width;
+		// tier 3 also adds a third centre barrel.
+		yellow := [4]f32{0.95, 0.80, 0.18, alpha}
+		base_r:   f32 = 8
+		barrel_t: f32 = 4
+		switch tier {
+		case 2: barrel_t = 5
+		case 3: barrel_t = 6; base_r = 9
+		}
+		p->draw_circle(cx, cy, base_r, yellow)
+		barrel_len := f32(14)
+		spread := f32(0.30)
+		ca := aim_angle + spread
+		cb := aim_angle - spread
+		p->draw_line(cx, cy, cx + math.cos(ca) * barrel_len, cy + math.sin(ca) * barrel_len, barrel_t, stroke)
+		p->draw_line(cx, cy, cx + math.cos(cb) * barrel_len, cy + math.sin(cb) * barrel_len, barrel_t, stroke)
+		if tier >= 3 {
+			p->draw_line(cx, cy,
+				cx + math.cos(aim_angle) * (barrel_len + 2),
+				cy + math.sin(aim_angle) * (barrel_len + 2),
+				barrel_t, stroke)
+		}
 
 	case .Relay:
 		// Concentric ring at full size (10/7/4); tiers add translated copies.
@@ -790,7 +834,7 @@ world_render_selection_influence :: proc(w: ^World, p: ^Platform, c: Hex_Coord) 
 		radius = relay_build_radius(tile.tier)
 		// Teal, matching the relay stroke palette.
 		color = {0.25, 0.85, 0.70, 0.55}
-	case .Core, .Farm, .Turret, .Wall, .Mortar:
+	case .Core, .Farm, .Turret, .Wall, .Mortar, .Flak:
 		return
 	}
 	if radius <= 0 do return

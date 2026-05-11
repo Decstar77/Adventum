@@ -3,6 +3,28 @@ package game
 import "core:math"
 import "core:math/rand"
 
+// Flak tuning. Short-to-medium range, very high fire rate, tiny per-shot
+// damage — the gun reads as a wall of fire. Bullets travel fast with a brief
+// life so off-target shots don't linger. Aim tolerance is wide so the spray
+// keeps firing while the barrels still slew, and we jitter each shot's angle
+// to sell the "spray" look without compromising aim on the lead target.
+FLAK_RANGE_PIXELS   :: f32(260)
+FLAK_FIRE_INTERVAL  :: f32(0.07)
+FLAK_DAMAGE         :: f32(3.5)
+FLAK_ROT_SPEED      :: f32(9.0)
+FLAK_AIM_TOLERANCE  :: f32(0.30)
+FLAK_PROJ_SPEED     :: f32(960)
+FLAK_PROJ_LIFE      :: f32(0.45)
+FLAK_PROJ_SPREAD    :: f32(0.08)
+
+flak_damage :: proc(tier: i32) -> f32 {
+	switch tier {
+	case 2: return FLAK_DAMAGE * 1.25
+	case 3: return FLAK_DAMAGE * 1.55
+	}
+	return FLAK_DAMAGE
+}
+
 TURRET_RANGE_PIXELS  :: f32(280)
 TURRET_FIRE_INTERVAL :: f32(0.9)
 TURRET_DAMAGE        :: f32(8)
@@ -40,6 +62,10 @@ Projectile :: struct {
 	// impact (or life expiry) we damage every enemy within `splash` and emit
 	// a bigger FX flash. Mortars set this when they fire.
 	splash: f32,
+	// Anti-air round: ignores every non-Flyer enemy on hit-test. Flak bullets
+	// set this so their spray doesn't accidentally chew through ground waves
+	// it isn't supposed to engage in the first place.
+	air_only: bool,
 }
 
 scrap_for_kind :: proc(kind: Enemy_Kind) -> i32 {
@@ -48,6 +74,7 @@ scrap_for_kind :: proc(kind: Enemy_Kind) -> i32 {
 	case .Brute:   return 4
 	case .Spitter: return 2
 	case .Swarmer: return 3
+	case .Flyer:   return 3
 	}
 	return 0
 }
@@ -140,6 +167,8 @@ projectiles_update :: proc(w: ^World, dt: f32) {
 		hit := false
 		for j in 0 ..< len(w.enemies) {
 			e := &w.enemies[j]
+			// Anti-air projectiles pass straight through ground enemies.
+			if p.air_only && e.kind != .Flyer do continue
 			dx := e.pos.x - p.pos.x
 			dy := e.pos.y - p.pos.y
 			if dx * dx + dy * dy <= hit_r2 {
@@ -273,9 +302,94 @@ mortars_fire :: proc(w: ^World, dt: f32) {
 	}
 }
 
+// Flak: pick the nearest Flyer in range — ground enemies are invisible to it.
+// Unlike turrets, returning -1 here is the common case (no flyers are usually
+// in the sky), so the caller's "no target" branch matters more.
+@(private="file")
+nearest_flyer_in_range :: proc(w: ^World, from: [2]f32, range: f32) -> int {
+	best := -1
+	best_d2 := range * range
+	for e, i in w.enemies {
+		if e.kind != .Flyer do continue
+		dx := e.pos.x - from.x
+		dy := e.pos.y - from.y
+		d2 := dx * dx + dy * dy
+		if d2 <= best_d2 {
+			best_d2 = d2
+			best = i
+		}
+	}
+	return best
+}
+
+// Flak guns rotate to track the nearest Flyer and lay down a fast spray.
+// Structurally a near-copy of `turrets_fire`, but constrained to anti-air
+// targets and emitting `air_only` projectiles so the spray never lands on
+// ground enemies that happen to drift through it.
+flaks_fire :: proc(w: ^World, dt: f32) {
+	for coord, tile in w.tiles {
+		if tile.kind != .Flak do continue
+		t := tile
+
+		origin := hex_to_pixel(coord)
+		idx := nearest_flyer_in_range(w, origin, FLAK_RANGE_PIXELS)
+
+		target_angle := t.aim_angle
+		has_target := idx >= 0
+		if has_target {
+			tp := w.enemies[idx].pos
+			// Lead a little — flyers move fast in a curve, so a touch of
+			// velocity prediction lifts the hit rate without making the gun
+			// feel laser-accurate.
+			LEAD :: f32(0.08)
+			lead_pos := [2]f32{
+				tp.x + math.cos(w.enemies[idx].heading) * (LEAD * 130),
+				tp.y + math.sin(w.enemies[idx].heading) * (LEAD * 130),
+			}
+			target_angle = math.atan2(lead_pos.y - origin.y, lead_pos.x - origin.x)
+		}
+		if t.energized {
+			t.aim_angle = approach_angle(t.aim_angle, target_angle, FLAK_ROT_SPEED * dt)
+		}
+
+		if t.cooldown > 0 {
+			t.cooldown -= dt
+			if t.cooldown < 0 do t.cooldown = 0
+		}
+
+		if t.energized && t.cooldown <= 0 && has_target {
+			if abs(shortest_angle_diff(t.aim_angle, target_angle)) <= FLAK_AIM_TOLERANCE {
+				// Random spread per bullet so the stream visually fans out.
+				spread := rand.float32_range(-FLAK_PROJ_SPREAD, FLAK_PROJ_SPREAD)
+				angle  := t.aim_angle + spread
+				dx := math.cos(angle)
+				dy := math.sin(angle)
+				muzzle := [2]f32{
+					origin.x + dx * TURRET_MUZZLE_OFFSET,
+					origin.y + dy * TURRET_MUZZLE_OFFSET,
+				}
+				append(&w.projectiles, Projectile{
+					pos      = muzzle,
+					vel      = {dx * FLAK_PROJ_SPEED, dy * FLAK_PROJ_SPEED},
+					dmg      = flak_damage(t.tier),
+					life     = FLAK_PROJ_LIFE,
+					air_only = true,
+				})
+				fx_emit_muzzle(w, muzzle, angle)
+				t.cooldown = FLAK_FIRE_INTERVAL
+				world_queue_sound_at(w, .Turret_Shoot, origin)
+			}
+		}
+
+		w.tiles[coord] = t
+	}
+}
+
 projectiles_render :: proc(w: ^World, p: ^Platform) {
-	color := [4]f32{0.886, 0.294, 0.290, 1}
+	red    := [4]f32{0.886, 0.294, 0.290, 1}
+	yellow := [4]f32{1.000, 0.860, 0.220, 1}
 	for proj in w.projectiles {
-		p->draw_circle(proj.pos.x, proj.pos.y, 3.5, color)
+		col := proj.air_only ? yellow : red
+		p->draw_circle(proj.pos.x, proj.pos.y, 3.5, col)
 	}
 }

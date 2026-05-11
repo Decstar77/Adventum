@@ -73,7 +73,7 @@ trickle_interval :: proc(t: f32) -> f32 {
 }
 
 @(private="file")
-surge_composition :: proc(index: i32) -> (crawlers, brutes, spitters, swarmers: i32) {
+surge_composition :: proc(index: i32) -> (crawlers, brutes, spitters, swarmers, flyers: i32) {
 	// `index` is 0-based (first surge => 0). Every wave includes at least one
 	// of each kind so the player actually sees the variety the game has — the
 	// previous gating ("brutes from wave 2, spitters from wave 2") meant
@@ -102,6 +102,11 @@ surge_composition :: proc(index: i32) -> (crawlers, brutes, spitters, swarmers: 
 	// Swarmers start at surge 1 (each splits into 2 crawlers, so we ramp slow
 	// to avoid runaway populations from chained splits).
 	if index >= 1 do swarmers = 1 + (index - 1) / 2
+	// Flyers appear from surge 2 — gives the player time to unlock the Flak
+	// (Core tier 2) before air pressure becomes a problem. Count ramps with
+	// index but stays modest; flyers ignore tile collision so even small
+	// numbers harass the economy if left alone.
+	if index >= 2 do flyers = 2 + (index - 2)
 	return
 }
 
@@ -111,12 +116,13 @@ surge_composition :: proc(index: i32) -> (crawlers, brutes, spitters, swarmers: 
 // instead of running away on a fixed-cadence schedule.
 @(private="file")
 surge_total_hp :: proc(index: i32) -> f32 {
-	crawlers, brutes, spitters, swarmers := surge_composition(index)
+	crawlers, brutes, spitters, swarmers, flyers := surge_composition(index)
 	chp, _, _ := enemy_stats(.Crawler)
 	bhp, _, _ := enemy_stats(.Brute)
 	shp, _, _ := enemy_stats(.Spitter)
 	whp, _, _ := enemy_stats(.Swarmer)
-	return f32(crawlers) * chp + f32(brutes) * bhp + f32(spitters) * shp + f32(swarmers) * whp
+	fhp, _, _ := enemy_stats(.Flyer)
+	return f32(crawlers) * chp + f32(brutes) * bhp + f32(spitters) * shp + f32(swarmers) * whp + f32(flyers) * fhp
 }
 
 // Pick the kind to spawn for a single trickle tick. Past the early game the
@@ -129,11 +135,19 @@ trickle_kind :: proc(surge_index: i32) -> Enemy_Kind {
 	switch {
 	case surge_index >= 3:
 		// Hardened mix: crawlers still dominate but brutes/spitters/swarmers
-		// bleed in.
+		// /flyers bleed in.
 		r := rand.float32()
-		if r < 0.10 do return .Brute
-		if r < 0.25 do return .Spitter
-		if r < 0.35 do return .Swarmer
+		if r < 0.08 do return .Flyer
+		if r < 0.18 do return .Brute
+		if r < 0.30 do return .Spitter
+		if r < 0.40 do return .Swarmer
+	case surge_index >= 2:
+		// Once flyers have debuted in a surge, the trickle gets a small
+		// chance to include them so the player can't just ignore air.
+		r := rand.float32()
+		if r < 0.06 do return .Flyer
+		if r < 0.18 do return .Spitter
+		if r < 0.28 do return .Swarmer
 	case surge_index >= 1:
 		// First taste of variety after the opening surge.
 		r := rand.float32()
@@ -168,10 +182,14 @@ waves_update :: proc(world: ^World, w: ^Wave_State, dt: f32) {
 
 	// Trigger a new surge.
 	if !w.surge_active && w.elapsed >= w.next_surge_at {
-		crawlers, brutes, spitters, swarmers := surge_composition(w.surge_index)
+		crawlers, brutes, spitters, swarmers, flyers := surge_composition(w.surge_index)
 		clear(&w.surge.queue)
 		// pop() removes the LAST element, so order the queue so crawlers spawn
-		// first (drama: small things first, brutes follow).
+		// first (drama: small things first, brutes follow). Flyers sit near
+		// the front of the spawn order (back of the queue) so they show up
+		// last — by the time they appear the player is already engaged with
+		// the ground push.
+		for _ in 0 ..< flyers   do append(&w.surge.queue, Enemy_Kind.Flyer)
 		for _ in 0 ..< brutes   do append(&w.surge.queue, Enemy_Kind.Brute)
 		for _ in 0 ..< swarmers do append(&w.surge.queue, Enemy_Kind.Swarmer)
 		for _ in 0 ..< spitters do append(&w.surge.queue, Enemy_Kind.Spitter)
