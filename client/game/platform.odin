@@ -102,8 +102,11 @@ Platform :: struct {
 	listener_y:     f32,
 	play_sound:     proc(p: ^Platform, sound: Sound),
 	play_sound_at:  proc(p: ^Platform, sound: Sound, x, y: f32),
-	// Toggle a looping sound on/off. Idempotent on both edges: calling with the
-	// state the loop is already in is a no-op, so the game can drive this from
-	// a per-frame "is anything still firing?" boolean without bookkeeping.
-	set_sound_loop: proc(p: ^Platform, sound: Sound, active: bool),
+	// Toggle a looping sound on/off and update its world-space emit position.
+	// Idempotent on the active flag: calling with the state the loop is already
+	// in is a no-op for start/stop, so the game can drive this from a per-frame
+	// "is anything still firing?" boolean without bookkeeping. Position is
+	// re-applied every call while the loop is active so the source tracks the
+	// emitter as it (or its centroid) moves.
+	set_sound_loop: proc(p: ^Platform, sound: Sound, active: bool, x, y: f32),
 }

@@ -176,7 +176,12 @@ World :: struct {
 	// cooldown). `game_update_and_render` reads this each frame to drive the
 	// looped flak-cannon sound on the host. Reset to false at the top of each
 	// `flaks_fire` call so a frame with no firing flaks naturally turns it off.
-	flak_firing:   bool,
+	flak_firing:     bool,
+	// World-space position the looped flak SFX should emit from. Computed each
+	// frame as the centroid of every flak that's currently engaged — keeps the
+	// loop spatially anchored without strobing between guns at the per-shot
+	// cadence, and gracefully averages across a multi-flak cluster.
+	flak_firing_pos: [2]f32,
 }
 
 // Ability tuning. Both abilities cost food + scrap and share a cooldown each.

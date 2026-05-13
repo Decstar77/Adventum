@@ -202,25 +202,43 @@ pick_variant :: proc(variants: [dynamic]cstring) -> (cstring, bool) {
 	return variants[idx], true
 }
 
-// Start or stop a single looped, non-spatial voice for `sound`. Idempotent on
+// Start or stop a single looped, spatial voice for `sound`. Idempotent on
 // both edges so the game can drive this from a per-frame "is anything still
-// firing?" bool without tracking transitions. The looped instance plays
-// through the engine listener at full volume (no attenuation) — it's an
-// environmental layer, not a positional effect.
-audio_set_loop :: proc(a: ^Audio, sound: game.Sound, active: bool) {
+// firing?" bool without tracking transitions. Position is in world pixels
+// (same space as `audio_play_at`) and re-applied every call while the loop is
+// active, so the emitter can drift as the game's centroid moves without
+// restarting the sound.
+audio_set_loop :: proc(a: ^Audio, sound: game.Sound, active: bool, x_px, y_px: f32) {
 	if !a.ready do return
 	playing := a.loops[sound] != nil
-	if active == playing do return
-	if active {
+	if !active {
+		if !playing do return
+		s := a.loops[sound]
+		ma.sound_uninit(s)
+		free(s)
+		a.loops[sound] = nil
+		return
+	}
+	x := x_px / AUDIO_PIXELS_PER_UNIT
+	z := y_px / AUDIO_PIXELS_PER_UNIT
+	if !playing {
 		path, ok := pick_variant(a.cpaths[sound])
 		if !ok do return
 		s := new(ma.sound)
-		flags := ma.sound_flags{.NO_PITCH, .NO_SPATIALIZATION}
+		flags := ma.sound_flags{.NO_PITCH}
 		if res := ma.sound_init_from_file(&a.engine, path, flags, nil, nil, s); res != .SUCCESS {
 			free(s)
 			return
 		}
 		ma.sound_set_looping(s, true)
+		// Same linear-falloff envelope as the one-shot positional path, so a
+		// looped emitter has the same audible radius as a fired-once sound at
+		// the same spot.
+		ma.sound_set_attenuation_model(s, .linear)
+		ma.sound_set_min_distance(s, AUDIO_MIN_DISTANCE)
+		ma.sound_set_max_distance(s, AUDIO_MAX_DISTANCE)
+		ma.sound_set_rolloff(s, AUDIO_ROLLOFF)
+		ma.sound_set_position(s, x, 0, z)
 		if res := ma.sound_start(s); res != .SUCCESS {
 			ma.sound_uninit(s)
 			free(s)
@@ -228,10 +246,7 @@ audio_set_loop :: proc(a: ^Audio, sound: game.Sound, active: bool) {
 		}
 		a.loops[sound] = s
 	} else {
-		s := a.loops[sound]
-		ma.sound_uninit(s)
-		free(s)
-		a.loops[sound] = nil
+		ma.sound_set_position(a.loops[sound], x, 0, z)
 	}
 }
 

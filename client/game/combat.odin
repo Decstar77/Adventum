@@ -66,6 +66,11 @@ Projectile :: struct {
 	// set this so their spray doesn't accidentally chew through ground waves
 	// it isn't supposed to engage in the first place.
 	air_only: bool,
+	// Ground-only round: skips Flyers entirely. Turret bullets set this so a
+	// flyer crossing the line of fire doesn't eat a shot meant for crawlers.
+	// Mortar shells leave it false — splash from a near-miss is allowed to
+	// clip airborne targets.
+	ground_only: bool,
 }
 
 scrap_for_kind :: proc(kind: Enemy_Kind) -> i32 {
@@ -80,10 +85,13 @@ scrap_for_kind :: proc(kind: Enemy_Kind) -> i32 {
 }
 
 @(private="file")
-nearest_enemy_in_range :: proc(w: ^World, from: [2]f32, range: f32) -> int {
+nearest_enemy_in_range :: proc(w: ^World, from: [2]f32, range: f32, skip_flyers: bool = false) -> int {
 	best := -1
 	best_d2 := range * range
 	for e, i in w.enemies {
+		// Turrets can't engage flyers (they're ground-only guns); the Flak is
+		// the dedicated AA. `skip_flyers` lets each caller opt in.
+		if skip_flyers && e.kind == .Flyer do continue
 		dx := e.pos.x - from.x
 		dy := e.pos.y - from.y
 		d2 := dx * dx + dy * dy
@@ -101,7 +109,7 @@ turrets_fire :: proc(w: ^World, dt: f32) {
 		t := tile
 
 		origin := hex_to_pixel(coord)
-		idx := nearest_enemy_in_range(w, origin, TURRET_RANGE_PIXELS)
+		idx := nearest_enemy_in_range(w, origin, TURRET_RANGE_PIXELS, skip_flyers = true)
 
 		// Track the nearest in-range enemy with a smooth rotation. With no
 		// target the barrel just holds its last bearing.
@@ -134,10 +142,11 @@ turrets_fire :: proc(w: ^World, dt: f32) {
 						origin.y + dy * TURRET_MUZZLE_OFFSET,
 					}
 					append(&w.projectiles, Projectile{
-						pos  = muzzle,
-						vel  = {dx * PROJECTILE_SPEED, dy * PROJECTILE_SPEED},
-						dmg  = dmg,
-						life = PROJECTILE_LIFE,
+						pos         = muzzle,
+						vel         = {dx * PROJECTILE_SPEED, dy * PROJECTILE_SPEED},
+						dmg         = dmg,
+						life        = PROJECTILE_LIFE,
+						ground_only = true,
 					})
 					fx_emit_muzzle(w, muzzle, angle)
 				}
@@ -169,6 +178,8 @@ projectiles_update :: proc(w: ^World, dt: f32) {
 			e := &w.enemies[j]
 			// Anti-air projectiles pass straight through ground enemies.
 			if p.air_only && e.kind != .Flyer do continue
+			// Ground-only projectiles ignore airborne enemies.
+			if p.ground_only && e.kind == .Flyer do continue
 			dx := e.pos.x - p.pos.x
 			dy := e.pos.y - p.pos.y
 			if dx * dx + dy * dy <= hit_r2 {
@@ -328,6 +339,8 @@ nearest_flyer_in_range :: proc(w: ^World, from: [2]f32, range: f32) -> int {
 // ground enemies that happen to drift through it.
 flaks_fire :: proc(w: ^World, dt: f32) {
 	w.flak_firing = false
+	firing_sum: [2]f32
+	firing_n:   i32 = 0
 	for coord, tile in w.tiles {
 		if tile.kind != .Flak do continue
 		t := tile
@@ -364,6 +377,8 @@ flaks_fire :: proc(w: ^World, dt: f32) {
 		// power.
 		if t.energized && has_target {
 			w.flak_firing = true
+			firing_sum += origin
+			firing_n   += 1
 		}
 		if t.energized && t.cooldown <= 0 && has_target {
 			if abs(shortest_angle_diff(t.aim_angle, target_angle)) <= FLAK_AIM_TOLERANCE {
@@ -392,6 +407,9 @@ flaks_fire :: proc(w: ^World, dt: f32) {
 		}
 
 		w.tiles[coord] = t
+	}
+	if firing_n > 0 {
+		w.flak_firing_pos = firing_sum / f32(firing_n)
 	}
 }
 

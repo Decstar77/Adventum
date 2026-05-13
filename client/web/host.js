@@ -473,7 +473,7 @@ const host = {
 	js_request_quit: () => { window.close(); },
 	js_play_sound:        (sound) => { playSound(sound); },
 	js_play_sound_at:     (sound, x, y) => { playSoundAt(sound, x, y); },
-	js_set_sound_loop:    (sound, active) => { if (typeof setSoundLoop === "function") setSoundLoop(sound, active !== 0); },
+	js_set_sound_loop:    (sound, active, x, y) => { if (typeof setSoundLoop === "function") setSoundLoop(sound, active !== 0, x, y); },
 	js_set_listener:      (x, y) => { setListener(x, y); },
 	js_set_master_volume: (v)     => {
 		masterVolume = Math.max(0, Math.min(1, v));

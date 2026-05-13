@@ -390,7 +390,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	// Drive the looped flak-cannon SFX. Idempotent on both edges — the host
 	// only starts/stops the underlying voice on a transition, so calling this
 	// every frame is cheap.
-	p->set_sound_loop(.Flak_Cannon_Loop, g.world.flak_firing)
+	p->set_sound_loop(.Flak_Cannon_Loop, g.world.flak_firing, g.world.flak_firing_pos.x, g.world.flak_firing_pos.y)
 
 	// Flush the simulation's queued sounds. Positional entries are forwarded
 	// to `play_sound_at` so the host can pan/attenuate; non-positional ones
@@ -450,7 +450,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	// before the world hit-tests so clicks on them don't fall through to the
 	// hex grid underneath.
 	ABIL_W :: f32(112)
-	ABIL_H :: f32(40)
+	ABIL_H :: f32(52)
 	ABIL_GAP :: f32(6)
 	bomb_x := sw - 12 - ABIL_W
 	bomb_y := gear_y + GEAR_S + 10
@@ -853,7 +853,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	// and — while on cooldown — a translucent overlay with the seconds left.
 	{
 		draw_ability :: proc(p: ^Platform, label, hotkey: string, x, y, w, h: f32,
-			ready, hover, held: bool, cooldown: f32,
+			ready, hover, held: bool, cooldown, cooldown_max: f32,
 			food_cost: i32, scrap_cost: i32) {
 			BASE  := [4]f32{0.18, 0.20, 0.26, 0.92}
 			HOVER := [4]f32{0.26, 0.30, 0.40, 0.95}
@@ -868,10 +868,18 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 			p->draw_line(x, y + h, x + w, y + h, 1, {0, 0, 0, 0.40})
 
 			font_small := p->font_size_px(.Small)
+			// Two stacked rows: label/hotkey on top, food+scrap cost cluster
+			// underneath. We split the inner height evenly so the rows can't
+			// overlap as long as `h >= 2*font_small + a bit of padding`.
+			pad_y    := f32(4)
+			row_h    := (h - pad_y * 2) * 0.5
+			top_y    := y + pad_y + row_h * 0.5            // vertical centre of top row
+			bot_y    := y + pad_y + row_h + row_h * 0.5    // vertical centre of bottom row
+
 			// Top line: "<label>  [<hotkey>]"
 			head := fmt.tprintf("%s  [%s]", label, hotkey)
 			hw := p->text_measure(head, .Small)
-			p->draw_text(x + (w - hw) * 0.5, y + 4 + font_small, head, {0.95, 0.95, 0.98, 1}, .Small)
+			p->draw_text(x + (w - hw) * 0.5, top_y + font_small * 0.35, head, {0.95, 0.95, 0.98, 1}, .Small)
 
 			// Bottom line: cost cluster "Nfood Mscrap" centred.
 			icon_s := f32(12)
@@ -882,29 +890,33 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 			gap := f32(4)
 			cluster_w := icon_s + gap + fw + 10 + icon_s + gap + sw
 			cx0 := x + (w - cluster_w) * 0.5
-			cy0 := y + h - 4 - font_small * 0.2
-			icon_y := y + h - 6 - icon_s
+			text_baseline := bot_y + font_small * 0.35
+			icon_y := bot_y - icon_s * 0.5
 			draw_food_icon(p, cx0, icon_y, icon_s)
-			p->draw_text(cx0 + icon_s + gap, cy0, food_str, {0.92, 0.98, 0.78, 1}, .Small)
+			p->draw_text(cx0 + icon_s + gap, text_baseline, food_str, {0.92, 0.98, 0.78, 1}, .Small)
 			sx0 := cx0 + icon_s + gap + fw + 10
 			draw_scrap_icon(p, sx0, icon_y, icon_s)
-			p->draw_text(sx0 + icon_s + gap, cy0, scrap_str, {0.78, 0.86, 1.00, 1}, .Small)
+			p->draw_text(sx0 + icon_s + gap, text_baseline, scrap_str, {0.78, 0.86, 1.00, 1}, .Small)
 
-			if !ready {
-				p->draw_rect(x, y, w, h, {0, 0, 0, 0.55})
-				cd_str := fmt.tprintf("%.0fs", cooldown)
-				cw := p->text_measure(cd_str, .Large)
-				p->draw_text(x + (w - cw) * 0.5, y + h * 0.5 + p->font_size_px(.Large) * 0.35, cd_str, {1, 0.85, 0.60, 1}, .Large)
+			if !ready && cooldown_max > 0 {
+				// Dark overlay shrinking from the right as the cooldown elapses,
+				// so the button visually "refills" left-to-darkening-only — the
+				// lit (right) portion grows toward the left as `cooldown` drains.
+				progress := 1 - cooldown / cooldown_max
+				if progress < 0 do progress = 0
+				if progress > 1 do progress = 1
+				dark_w := w * (1 - progress)
+				if dark_w > 0 do p->draw_rect(x, y, dark_w, h, {0, 0, 0, 0.55})
 			}
 		}
 		bomb_ready := world_can_use_bomb(&g.world)
 		emp_ready  := world_can_use_emp(&g.world)
 		draw_ability(p, "Bomb", "Q", bomb_x, bomb_y, ABIL_W, ABIL_H,
 			bomb_ready, mouse_in_bomb, mouse_in_bomb && p.mouse_left_down,
-			g.world.bomb_cooldown, i32(BOMB_FOOD_COST), BOMB_SCRAP_COST)
+			g.world.bomb_cooldown, BOMB_COOLDOWN, i32(BOMB_FOOD_COST), BOMB_SCRAP_COST)
 		draw_ability(p, "EMP",  "E", emp_x,  emp_y,  ABIL_W, ABIL_H,
 			emp_ready, mouse_in_emp, mouse_in_emp && p.mouse_left_down,
-			g.world.emp_cooldown,  i32(EMP_FOOD_COST),  EMP_SCRAP_COST)
+			g.world.emp_cooldown,  EMP_COOLDOWN,  i32(EMP_FOOD_COST),  EMP_SCRAP_COST)
 		// While the EMP is freezing the field, paint a faint cyan vignette over
 		// the screen as feedback that the world is paused for enemies.
 		if g.world.emp_time > 0 {

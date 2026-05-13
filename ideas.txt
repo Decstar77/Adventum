@@ -43,3 +43,16 @@
 
   7. Audio polish (cheap, big perceived-value win). FMOD bindings exist but aren't wired (per CLAUDE.md). Music tracks per phase
    (calm / surge / boss), ambient hum that intensifies with enemy count, unique death stings for new enemy kinds.
+
+
+Please add a flyer enemy, in the shape of a yellow triangle. 
+The flyer never stops moving, and so much turn realstically. Also add some nice end trails for visual effect. 
+The flyer is not effected by collision of tiles.
+The flyer targets farms first and then generators first ( which ever is closer), then they target relays and other structures exect walls ( again which ever is closest )
+
+To target this new enemy we'll add a new building tile, the flack cannon.
+It shoots a very fast spray of fire perfect for dealing with flyers
+The cannon must be power up 
+The cannon cannot shoot ground targets. 
+The cannon can only be bought at a tier 2 core.
+
