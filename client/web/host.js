@@ -6,6 +6,60 @@ const canvas = document.getElementById('screen');
 const ctx    = canvas.getContext('2d');
 const status = document.getElementById('status');
 
+// --- CrazyGames SDK ---------------------------------------------------------
+// Available when this build is loaded in the CrazyGames iframe; falls back to
+// undefined when served from a plain dev server. Every SDK call below is
+// gated on `CG` so the local build keeps working unchanged.
+const CG = (typeof window !== 'undefined' && window.CrazyGames) ? window.CrazyGames.SDK : null;
+let cgReady = false;
+async function initCrazyGames() {
+	if (!CG) return;
+	try {
+		await CG.init();
+		cgReady = true;
+	} catch (err) {
+		console.warn('CrazyGames SDK init failed:', err);
+	}
+}
+
+// CrazyGames lifecycle: gameplayStart/Stop are mandatory for ad approval
+// (they tell the SDK when the player is actively playing vs. on a menu). We
+// edge-detect on the boolean the wasm pushes each frame.
+let gameplayActive = false;
+function setGameplayActive(active) {
+	active = !!active;
+	if (active === gameplayActive) return;
+	gameplayActive = active;
+	if (!cgReady || !CG.game) return;
+	try {
+		if (active) CG.game.gameplayStart();
+		else        CG.game.gameplayStop();
+	} catch (err) { console.warn('CG gameplay state:', err); }
+}
+
+// --- Persistence ------------------------------------------------------------
+// Prefer the CrazyGames user-scoped data API (cloud-synced when the player is
+// logged in); fall back to localStorage so the local build still persists
+// volume + best time. Values are stored as strings.
+const STORAGE_PREFIX = 'adventum:';
+function storageGet(key) {
+	const fullKey = STORAGE_PREFIX + key;
+	if (cgReady && CG.data && typeof CG.data.getItem === 'function') {
+		try {
+			const v = CG.data.getItem(fullKey);
+			if (v !== null && v !== undefined) return v;
+		} catch {}
+	}
+	try { return localStorage.getItem(fullKey); } catch { return null; }
+}
+function storageSet(key, value) {
+	const fullKey = STORAGE_PREFIX + key;
+	if (cgReady && CG.data && typeof CG.data.setItem === 'function') {
+		try { CG.data.setItem(fullKey, value); } catch {}
+	}
+	try { localStorage.setItem(fullKey, value); } catch {}
+}
+
 // --- Background shader (WebGL2) --------------------------------------------
 //
 // The win32/Vulkan host renders a full-screen procedural background via
@@ -542,7 +596,11 @@ const host = {
 		if (!document.fullscreenElement) canvas.requestFullscreen?.();
 		else document.exitFullscreen?.();
 	},
-	js_request_quit: () => { window.close(); },
+	// `window.close()` is blocked in CrazyGames iframes and flagged by review,
+	// so we soft-pause instead: drop gameplay state and let the host decide
+	// (e.g. CrazyGames may show its own exit prompt). The game currently never
+	// triggers this — kept as a no-op for safety.
+	js_request_quit: () => { setGameplayActive(false); },
 	js_play_sound:        (sound) => { playSound(sound); },
 	js_play_sound_at:     (sound, x, y) => { playSoundAt(sound, x, y); },
 	js_set_sound_loop:    (sound, active, x, y) => { if (typeof setSoundLoop === "function") setSoundLoop(sound, active !== 0, x, y); },
@@ -550,6 +608,20 @@ const host = {
 	js_set_master_volume: (v)     => {
 		masterVolume = Math.max(0, Math.min(1, v));
 		if (audioMasterGain) audioMasterGain.gain.value = masterVolume;
+	},
+	js_set_gameplay_active: (active) => { setGameplayActive(active !== 0); },
+	js_save_f32: (ptr, len, value) => {
+		const key = decodeString(ptr, len);
+		if (!key) return;
+		storageSet(key, String(value));
+	},
+	js_load_f32: (ptr, len, def) => {
+		const key = decodeString(ptr, len);
+		if (!key) return def;
+		const raw = storageGet(key);
+		if (raw === null || raw === undefined) return def;
+		const v = parseFloat(raw);
+		return Number.isFinite(v) ? v : def;
 	},
 };
 
@@ -633,6 +705,25 @@ const odin_env = new Proxy(libm, {
 
 const imports = { host, odin_env, env: odin_env };
 
+// --- Responsive sizing ------------------------------------------------------
+// CrazyGames embeds in iframes of varying sizes (desktop ~1280×720 default,
+// mobile portrait can be ~360×640). Match both canvases' internal pixel
+// dimensions to the viewport so the game (which renders directly in
+// screen-pixel coords) fills the iframe at 1:1 without letterboxing.
+const bgStage = document.getElementById('stage');
+function resizeCanvases() {
+	const w = Math.max(1, window.innerWidth  | 0);
+	const h = Math.max(1, window.innerHeight | 0);
+	if (canvas.width  !== w) canvas.width  = w;
+	if (canvas.height !== h) canvas.height = h;
+	if (bgCanvas && (bgCanvas.width !== w || bgCanvas.height !== h)) {
+		bgCanvas.width  = w;
+		bgCanvas.height = h;
+	}
+}
+resizeCanvases();
+window.addEventListener('resize', resizeCanvases);
+
 let mouseX = 0, mouseY = 0, mouseLeft = 0, mouseRight = 0, scrollDy = 0;
 
 canvas.addEventListener('mousemove', (e) => {
@@ -671,6 +762,22 @@ let exports;
 
 (async function () {
 	try {
+		// Init the CrazyGames SDK first so it can register our loading window
+		// (and so storageGet during web_init can hit cloud save). If the SDK
+		// isn't present we skip silently — the game still runs.
+		await initCrazyGames();
+
+		const cgGame = (cgReady && CG.game) ? CG.game : null;
+		const callLoadingStart = () => {
+			if (!cgGame) return;
+			try { (cgGame.sdkGameLoadingStart || cgGame.loadingStart)?.call(cgGame); } catch {}
+		};
+		const callLoadingStop = () => {
+			if (!cgGame) return;
+			try { (cgGame.sdkGameLoadingStop  || cgGame.loadingStop )?.call(cgGame); } catch {}
+		};
+		callLoadingStart();
+
 		const url = new URL('client.wasm', import.meta.url);
 		const result = await WebAssembly.instantiateStreaming(fetch(url), imports);
 		exports = result.instance.exports;
@@ -679,6 +786,8 @@ let exports;
 		exports.web_init();
 		status.remove();
 		canvas.focus();
+
+		callLoadingStop();
 
 		const start = performance.now();
 		let last = start;

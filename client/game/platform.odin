@@ -93,6 +93,19 @@ Platform :: struct {
 	toggle_fullscreen: proc(p: ^Platform),
 	request_quit:      proc(p: ^Platform),
 
+	// Lifecycle hint for embedded hosts (e.g. CrazyGames gameplayStart/Stop,
+	// ad SDKs). The game writes this each frame: true while the player is in
+	// an active run, false while paused, on a game-over/victory screen, or
+	// before the first frame. Hosts edge-detect on changes; setting it every
+	// frame to the same value is cheap.
+	gameplay_active: bool,
+
+	// Simple key/value persistence. `key` is a UTF-8 string; the host stores
+	// it across sessions (CrazyGames cloud save when available with a
+	// localStorage fallback in the browser; no-op on win32 for now).
+	save_f32: proc(p: ^Platform, key: string, value: f32),
+	load_f32: proc(p: ^Platform, key: string, default_value: f32) -> f32,
+
 	// Audio. Game writes `master_volume` (0..1) each frame; the host applies
 	// it to the underlying audio engine. `play_sound` is fire-and-forget —
 	// the host is free to overlap copies of the same family.

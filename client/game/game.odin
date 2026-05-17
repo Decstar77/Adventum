@@ -26,12 +26,18 @@ Game :: struct {
 	selected_tile: Hex_Coord,
 	has_selection: bool,
 
-	// Pause menu. Volume is a stub — no audio is wired up yet, but the slider
-	// drives this value so it's ready for FMOD when it lands.
+	// Pause menu. Volume persists across sessions via the host's save_f32
+	// (CrazyGames cloud save / localStorage on web).
 	paused:           bool,
 	show_controls:    bool,
 	volume:           f32,
 	volume_dragging:  bool,
+	volume_was_dragging: bool, // edge-detect drag release to trigger save
+
+	// Best survival time across runs. Loaded at game_init via the host's
+	// load_f32, written on game-over / victory when the current run beats it.
+	best_time:        f32,
+	run_result_saved: bool, // one-shot guard so we only save once per run
 
 	// Right-mouse pan: track the mouse position from last frame so we can
 	// turn movement-while-RMB-held into camera panning. `rmb_drag_total` is
@@ -173,11 +179,14 @@ HOTKEYS := [BUILDABLE_COUNT]Key{
 	.Num1, .Num2, .Num3, .Num4, .Num5, .Num6, .Num7,
 }
 
-game_init :: proc(g: ^Game) {
+game_init :: proc(g: ^Game, p: ^Platform) {
 	g.cam = Camera{pos = {0, 0}, zoom = 1}
 	g.selected_kind = .Farm
 	g.mode = .Default
-	g.volume = 0.1
+	g.volume = p.load_f32 != nil ? p->load_f32("volume", 0.1) : 0.1
+	if g.volume < 0 do g.volume = 0
+	if g.volume > 1 do g.volume = 1
+	g.best_time = p.load_f32 != nil ? p->load_f32("best_time", 0) : 0
 	world_init(&g.world)
 	// Initial energization pass so the Core's energized flag is correct from frame 0.
 	world_tick(&g.world, 0)
@@ -202,6 +211,7 @@ game_restart :: proc(g: ^Game) {
 	g.tick_accum = 0
 	g.paused = false
 	g.show_controls = false
+	g.run_result_saved = false
 }
 
 // Stylised gear icon for the pause-menu button — four cardinal teeth, a body
@@ -228,6 +238,29 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	// pause-menu slider in real time. Done first so any sounds emitted this
 	// frame (button clicks, simulation events) play at the right level.
 	p.master_volume = g.volume
+
+	// Lifecycle hint for embedded hosts (CrazyGames gameplayStart/Stop, ad
+	// SDKs). Active iff a run is in progress and the player isn't on a modal
+	// (pause menu, game-over, victory). Hosts edge-detect on transitions.
+	p.gameplay_active = !g.paused && !g.world.game_over && !g.world.victory
+
+	// Persist volume on slider release. Saving every frame during drag would
+	// be wasteful (and CrazyGames cloud save is rate-limited), so we wait for
+	// the drag to end and write once.
+	if g.volume_was_dragging && !g.volume_dragging {
+		if p.save_f32 != nil do p->save_f32("volume", g.volume)
+	}
+	g.volume_was_dragging = g.volume_dragging
+
+	// Persist best survival time once per run when the run resolves. Both
+	// game-over and victory count — survival is survival.
+	if !g.run_result_saved && (g.world.game_over || g.world.victory) {
+		if g.world.survive_time > g.best_time {
+			g.best_time = g.world.survive_time
+			if p.save_f32 != nil do p->save_f32("best_time", g.best_time)
+		}
+		g.run_result_saved = true
+	}
 
 	// Listener position: the camera centre, in the same world-pixel space the
 	// simulation queues sounds in. Zoom is deliberately ignored — the audio
@@ -874,30 +907,40 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		g.fps, g.frame_ms, g.cam.zoom, hover.x, hover.y, mode_label, tile_kind_name(g.selected_kind))
 	p->draw_text(12, sh - 12 - picker_h - 12 - font_small, stats, {0.65, 0.70, 0.78, 1}, .Small)
 
-	if g.world.game_over {
+	if g.world.game_over || g.world.victory {
 		p->draw_rect(0, 0, sw, sh, {0, 0, 0, 0.65})
-		head := "CORE DESTROYED"
+		head_color: [4]f32
+		head: string
+		if g.world.game_over {
+			head = "CORE DESTROYED"
+			head_color = {1.00, 0.82, 0.82, 1}
+		} else {
+			head = "CORE HELD  -  ALL WAVES CLEARED"
+			head_color = {0.78, 1.00, 0.82, 1}
+		}
 		body := fmt.tprintf("Survived %.1fs   |   Scrap collected: %d", g.world.survive_time, g.world.scrap)
+		best_str: string
+		if g.world.survive_time >= g.best_time && g.best_time > 0 && g.run_result_saved {
+			best_str = fmt.tprintf("NEW BEST  %.1fs", g.best_time)
+		} else if g.best_time > 0 {
+			best_str = fmt.tprintf("Best  %.1fs", g.best_time)
+		}
 		tip  := "Press R to restart"
 		hw := p->text_measure(head, .Large)
 		bw := p->text_measure(body, .Small)
 		tw := p->text_measure(tip,  .Small)
 		cy := sh * 0.5
-		p->draw_text((sw - hw) * 0.5, cy - 28, head, {1.00, 0.82, 0.82, 1}, .Large)
+		p->draw_text((sw - hw) * 0.5, cy - 28, head, head_color, .Large)
 		p->draw_text((sw - bw) * 0.5, cy + 24, body, {0.96, 0.96, 0.96, 1},  .Small)
-		p->draw_text((sw - tw) * 0.5, cy + 56, tip,  {0.78, 0.86, 1.00, 1},  .Small)
-	} else if g.world.victory {
-		p->draw_rect(0, 0, sw, sh, {0, 0, 0, 0.65})
-		head := "CORE HELD  -  ALL WAVES CLEARED"
-		body := fmt.tprintf("Survived %.1fs   |   Scrap collected: %d", g.world.survive_time, g.world.scrap)
-		tip  := "Press R to restart"
-		hw := p->text_measure(head, .Large)
-		bw := p->text_measure(body, .Small)
-		tw := p->text_measure(tip,  .Small)
-		cy := sh * 0.5
-		p->draw_text((sw - hw) * 0.5, cy - 28, head, {0.78, 1.00, 0.82, 1}, .Large)
-		p->draw_text((sw - bw) * 0.5, cy + 24, body, {0.96, 0.96, 0.96, 1},  .Small)
-		p->draw_text((sw - tw) * 0.5, cy + 56, tip,  {0.78, 0.86, 1.00, 1},  .Small)
+		if best_str != "" {
+			best_color := head_color
+			if g.world.survive_time >= g.best_time && g.run_result_saved {
+				best_color = {1.00, 0.92, 0.55, 1}
+			}
+			best_w := p->text_measure(best_str, .Small)
+			p->draw_text((sw - best_w) * 0.5, cy + 44, best_str, best_color, .Small)
+		}
+		p->draw_text((sw - tw) * 0.5, cy + 72, tip,  {0.78, 0.86, 1.00, 1},  .Small)
 	}
 
 	// Ability buttons. Drawn here so they sit above the HUD and selection

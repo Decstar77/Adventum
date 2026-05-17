@@ -2,17 +2,20 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
 <title>Adventum</title>
 <style>
-  html, body { margin: 0; background: #050507; height: 100%; overflow: hidden; }
-  body { display: grid; place-items: center; font-family: monospace; color: #aab; }
-  /* Stack the WebGL background under the 2D shapes/text canvas. They share
-     identical pixel dimensions so the GL coords map 1:1 onto the 2D coords. */
-  #stage  { position: relative; width: 1280px; height: 720px; }
-  #stage canvas { position: absolute; inset: 0; display: block; cursor: default; }
+  html, body { margin: 0; padding: 0; background: #050507; height: 100%; overflow: hidden; }
+  body { font-family: monospace; color: #aab; }
+  /* Stage fills the iframe. Both canvases use the same pixel dimensions,
+     resized to match the viewport on load/resize so the WebGL background
+     and 2D shapes/text stay aligned. */
+  #stage  { position: fixed; inset: 0; width: 100vw; height: 100vh; }
+  #stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: default; }
   #screen { image-rendering: pixelated; background: transparent; }
   #bg     { background: #050507; }
-  #status { position: fixed; top: 8px; left: 12px; opacity: 0.7; }
+  #status { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            opacity: 0.85; font-size: 18px; letter-spacing: 1px; }
 </style>
 </head>
 <body>
@@ -21,6 +24,9 @@
   <canvas id="screen" width="1280" height="720" tabindex="0"></canvas>
 </div>
 <div id="status">loading…</div>
+<!-- CrazyGames SDK. Falls through gracefully (window.CrazyGames undefined)
+     when served outside the CrazyGames iframe — host.js gates every call. -->
+<script src="https://sdk.crazygames.com/crazygames-sdk-v3.js"></script>
 <script type="module" src="host.js"></script>
 </body>
 </html>

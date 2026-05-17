@@ -41,6 +41,13 @@ foreign host {
 	// camera so they pan/zoom with the scene.
 	js_fog_lights_clear  :: proc() ---
 	js_fog_lights_push   :: proc(x, y: f32) ---
+	// CrazyGames SDK lifecycle hint. Host edge-detects on the boolean and
+	// calls gameplayStart() / gameplayStop().
+	js_set_gameplay_active :: proc(active: i32) ---
+	// Persistence. Host writes via CrazyGames SDK cloud save with a
+	// localStorage fallback; reads with the same fallback chain.
+	js_save_f32          :: proc(key_ptr: rawptr, key_len: i32, value: f32) ---
+	js_load_f32          :: proc(key_ptr: rawptr, key_len: i32, default_value: f32) -> f32 ---
 }
 
 App :: struct {
@@ -62,7 +69,7 @@ web_init :: proc "c" () {
 	context = runtime.default_context()
 	if g_started do return
 	g_platform = make_platform()
-	game.game_init(&g_game)
+	game.game_init(&g_game, &g_platform)
 	g_started = true
 }
 
@@ -103,6 +110,9 @@ web_frame :: proc "c" (
 	// with `js_play_sound_at` for spatial panning/attenuation.
 	js_set_master_volume(g_platform.master_volume)
 	js_set_listener(g_platform.listener_x, g_platform.listener_y)
+	// Lifecycle hint for the CrazyGames SDK (gameplayStart/Stop edge-detected
+	// host-side). Cheap to push every frame.
+	js_set_gameplay_active(g_platform.gameplay_active ? 1 : 0)
 
 	// Edge-detect at end of frame: events that arrive between frames update
 	// keys_down only — keys_was_down still reflects last frame, so the first
@@ -133,7 +143,19 @@ make_platform :: proc() -> game.Platform {
 		play_sound          = plat_play_sound,
 		play_sound_at       = plat_play_sound_at,
 		set_sound_loop      = plat_set_sound_loop,
+		save_f32            = plat_save_f32,
+		load_f32            = plat_load_f32,
 	}
+}
+
+@(private="file")
+plat_save_f32 :: proc(p: ^game.Platform, key: string, value: f32) {
+	js_save_f32(raw_data(key), i32(len(key)), value)
+}
+
+@(private="file")
+plat_load_f32 :: proc(p: ^game.Platform, key: string, default_value: f32) -> f32 {
+	return js_load_f32(raw_data(key), i32(len(key)), default_value)
 }
 
 @(private="file")

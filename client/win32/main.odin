@@ -108,10 +108,12 @@ main :: proc() {
 		play_sound          = plat_play_sound,
 		play_sound_at       = plat_play_sound_at,
 		set_sound_loop      = plat_set_sound_loop,
+		save_f32            = plat_save_f32,
+		load_f32            = plat_load_f32,
 	}
 
 	g: game.Game
-	game.game_init(&g)
+	game.game_init(&g, &platform)
 	defer game.game_shutdown(&g)
 
 	monitor := glfw.GetPrimaryMonitor()
@@ -382,4 +384,15 @@ plat_play_sound_at :: proc(p: ^game.Platform, sound: game.Sound, x, y: f32) {
 @(private="file")
 plat_set_sound_loop :: proc(p: ^game.Platform, sound: game.Sound, active: bool, x, y: f32) {
 	audio_set_loop(&app_of(p).audio, sound, active, x, y)
+}
+
+// Persistence stubs. Win32 currently has no on-disk save store; returning the
+// default lets the game start with sensible values. Wire to a real file
+// (e.g. %APPDATA%\Adventum\settings.ini) when desktop release matters.
+@(private="file")
+plat_save_f32 :: proc(p: ^game.Platform, key: string, value: f32) {}
+
+@(private="file")
+plat_load_f32 :: proc(p: ^game.Platform, key: string, default_value: f32) -> f32 {
+	return default_value
 }
