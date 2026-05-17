@@ -4,7 +4,27 @@
 
 const canvas = document.getElementById('screen');
 const ctx    = canvas.getContext('2d');
-const status = document.getElementById('status');
+
+// Splash + progress bar. The progress fill is driven by a streaming wasm
+// fetch below (Content-Length permitting); the text underneath swaps to a
+// short status message ("loading…", "running…", or an error).
+const splashEl   = document.getElementById('splash');
+const splashFill = document.getElementById('splash-fill');
+const splashText = document.getElementById('splash-text');
+function setProgress(frac) {
+	if (!splashFill) return;
+	const pct = Math.max(0, Math.min(1, frac)) * 100;
+	splashFill.style.width = pct.toFixed(1) + '%';
+}
+function setStatus(msg) {
+	if (splashText) splashText.textContent = msg;
+}
+function hideSplash() {
+	if (!splashEl) return;
+	splashEl.classList.add('fade');
+	// Remove from layout after the CSS transition so it doesn't eat clicks.
+	setTimeout(() => splashEl.remove(), 400);
+}
 
 // --- CrazyGames SDK ---------------------------------------------------------
 // Available when this build is loaded in the CrazyGames iframe; falls back to
@@ -778,13 +798,48 @@ let exports;
 		};
 		callLoadingStart();
 
+		// Stream the wasm so we can drive the splash progress bar. We can't use
+		// WebAssembly.instantiateStreaming here because that consumes the
+		// Response directly — instead we read the body in chunks, tally bytes
+		// against Content-Length, and hand the assembled buffer to instantiate.
 		const url = new URL('client.wasm', import.meta.url);
-		const result = await WebAssembly.instantiateStreaming(fetch(url), imports);
+		const response = await fetch(url);
+		if (!response.ok) throw new Error('wasm fetch failed: ' + response.status);
+
+		const total = parseInt(response.headers.get('Content-Length') || '0', 10);
+		let received = 0;
+		const chunks = [];
+		const reader = response.body && response.body.getReader ? response.body.getReader() : null;
+		if (reader) {
+			for (;;) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				chunks.push(value);
+				received += value.byteLength;
+				if (total > 0) setProgress(received / total);
+				else           setProgress(0.5); // indeterminate-ish: park at half
+			}
+		} else {
+			// No streaming body available (very old browser); fall back to a
+			// blocking arrayBuffer and jump straight to 100%.
+			chunks.push(new Uint8Array(await response.arrayBuffer()));
+			received = chunks[0].byteLength;
+		}
+		setProgress(1);
+
+		// Concatenate into a single buffer for instantiate.
+		const wasmBytes = new Uint8Array(received);
+		{
+			let off = 0;
+			for (const c of chunks) { wasmBytes.set(c, off); off += c.byteLength; }
+		}
+		setStatus('initializing…');
+		const result = await WebAssembly.instantiate(wasmBytes, imports);
 		exports = result.instance.exports;
 		memory  = exports.memory;
 		initBackgroundGL();
 		exports.web_init();
-		status.remove();
+		hideSplash();
 		canvas.focus();
 
 		callLoadingStop();
@@ -821,7 +876,7 @@ let exports;
 		}
 		requestAnimationFrame(frame);
 	} catch (err) {
-		status.textContent = 'failed to load: ' + err.message;
+		setStatus('failed to load: ' + err.message);
 		console.error(err);
 	}
 })();
