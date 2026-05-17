@@ -2,8 +2,12 @@
 // client/web/main.odin, drives the frame loop via requestAnimationFrame, and
 // forwards browser input into the wasm module.
 
-const canvas = document.getElementById('screen');
-const ctx    = canvas.getContext('2d');
+const canvas  = document.getElementById('screen');
+const ctx     = canvas.getContext('2d');
+// Declared up here so `js_toggle_fullscreen` (defined inside the host object
+// below) can close over it without a TDZ hazard — the responsive sizing code
+// further down also reads it.
+const bgStage = document.getElementById('stage');
 
 // Splash + progress bar. The progress fill is driven by a streaming wasm
 // fetch below (Content-Length permitting); the text underneath swaps to a
@@ -32,6 +36,19 @@ function hideSplash() {
 // gated on `CG` so the local build keeps working unchanged.
 const CG = (typeof window !== 'undefined' && window.CrazyGames) ? window.CrazyGames.SDK : null;
 let cgReady = false;
+// CG.data.getItem is documented as synchronous in v3, but some host builds
+// have shipped a Promise-returning variant. Probe once at init: if the call
+// returns a thenable we treat the sync API as unavailable and fall through to
+// localStorage (which is what we'd do anyway on a non-CG host). setItem is
+// still safe to fire-and-forget either way.
+let cgDataSync = false;
+let cgMuted = false;
+function applyCgMute() {
+	if (!audioMasterGain) return;
+	audioMasterGain.gain.value = cgMuted ? 0 : masterVolume;
+	if (cgMuted) musicPause();
+	else         musicResume();
+}
 async function initCrazyGames() {
 	if (!CG) return;
 	try {
@@ -39,7 +56,40 @@ async function initCrazyGames() {
 		cgReady = true;
 	} catch (err) {
 		console.warn('CrazyGames SDK init failed:', err);
+		return;
 	}
+	// Probe data API shape.
+	if (CG.data && typeof CG.data.getItem === 'function') {
+		try {
+			const probe = CG.data.getItem(STORAGE_PREFIX + '__probe');
+			cgDataSync = !(probe && typeof probe.then === 'function');
+		} catch { cgDataSync = false; }
+	}
+	// Respect the CG navbar mute toggle — required for review. The SDK exposes
+	// both an initial state getter and a listener; shapes vary slightly across
+	// SDK builds so we feature-detect each.
+	try {
+		const user = CG.user;
+		if (user) {
+			if (typeof user.isUserAccountAvailable !== 'undefined') { /* no-op, just touch */ }
+			if (typeof user.getSystemInfo === 'function') { /* available for future use */ }
+		}
+		// Mute API: in v3 this lives on SDK.user.addMuteListener / getMuteState
+		// on some builds, and on SDK.game on others. Try both.
+		const muteHost = (CG.user && typeof CG.user.addMuteListener === 'function') ? CG.user
+		             : (CG.game && typeof CG.game.addMuteListener === 'function') ? CG.game
+		             : null;
+		if (muteHost) {
+			if (typeof muteHost.getMuteState === 'function') {
+				try { cgMuted = !!muteHost.getMuteState(); } catch {}
+			}
+			muteHost.addMuteListener((muted) => {
+				cgMuted = !!muted;
+				applyCgMute();
+			});
+			applyCgMute();
+		}
+	} catch (err) { console.warn('CG mute listener wiring failed:', err); }
 }
 
 // CrazyGames lifecycle: gameplayStart/Stop are mandatory for ad approval
@@ -65,10 +115,21 @@ function setGameplayActive(active) {
 // Falls through to a no-op when the SDK isn't ready (local dev server, or
 // review build before the SDK injects). One in-flight ad at a time — extra
 // requests while an ad is rendering are dropped to keep audio state sane.
+// CrazyGames policy: no mid-game ad within ~60 s of session start, and ≥60 s
+// between ads. We enforce both client-side so a fast restart loop after death
+// can't fire ads back-to-back (which fails QA review). `sessionStartMs` is set
+// once at module load; `lastAdEndMs` tracks the most recent finished ad.
+const AD_MIN_INTERVAL_MS  = 60_000;
+const AD_SESSION_WARMUP_MS = 60_000;
+const sessionStartMs = performance.now();
+let lastAdEndMs = -Infinity;
 let adInFlight = false;
 function requestMidgameAd() {
 	if (!cgReady || !CG.ad || typeof CG.ad.requestAd !== 'function') return;
 	if (adInFlight) return;
+	const now = performance.now();
+	if (now - sessionStartMs < AD_SESSION_WARMUP_MS) return;
+	if (now - lastAdEndMs     < AD_MIN_INTERVAL_MS)  return;
 	adInFlight = true;
 	// CrazyGames policy: the SDK must see gameplayStop before the midgame ad
 	// request. The game writes gameplay_active=false on the same frame, but it
@@ -83,6 +144,7 @@ function requestMidgameAd() {
 	};
 	const onFinish = () => {
 		adInFlight = false;
+		lastAdEndMs = performance.now();
 		// Resume audio only if the player is back in a state where they'd
 		// expect it: the game might have been restarted / unpaused while the
 		// ad ran. resumeAudio is idempotent on an already-running context.
@@ -112,10 +174,14 @@ function requestHappytime() {
 const STORAGE_PREFIX = 'adventum:';
 function storageGet(key) {
 	const fullKey = STORAGE_PREFIX + key;
-	if (cgReady && CG.data && typeof CG.data.getItem === 'function') {
+	if (cgReady && cgDataSync && CG.data && typeof CG.data.getItem === 'function') {
 		try {
 			const v = CG.data.getItem(fullKey);
-			if (v !== null && v !== undefined) return v;
+			// Defensive: even if the probe said sync, a stray Promise here means
+			// the SDK changed shape — fall back to localStorage rather than
+			// returning a thenable to the wasm side as a "string".
+			if (v && typeof v.then === 'function') { /* ignore */ }
+			else if (v !== null && v !== undefined) return v;
 		} catch {}
 	}
 	try { return localStorage.getItem(fullKey); } catch { return null; }
@@ -123,7 +189,8 @@ function storageGet(key) {
 function storageSet(key, value) {
 	const fullKey = STORAGE_PREFIX + key;
 	if (cgReady && CG.data && typeof CG.data.setItem === 'function') {
-		try { CG.data.setItem(fullKey, value); } catch {}
+		// setItem is fire-and-forget; safe whether it returns void or a Promise.
+		try { const r = CG.data.setItem(fullKey, value); if (r && r.catch) r.catch(() => {}); } catch {}
 	}
 	try { localStorage.setItem(fullKey, value); } catch {}
 }
@@ -382,6 +449,7 @@ const AUDIO_ROLLOFF         = 1.0;
 
 let audioCtx        = null;
 let audioMasterGain = null;
+let audioLimiter    = null;
 let listenerPx      = { x: 0, y: 0 };
 
 // Create the AudioContext eagerly so `decodeAudioData` is available during
@@ -395,7 +463,18 @@ function initAudioContext() {
 	audioCtx = new Ctx();
 	audioMasterGain = audioCtx.createGain();
 	audioMasterGain.gain.value = masterVolume;
-	audioMasterGain.connect(audioCtx.destination);
+	// SOUND_GAIN values > 1 (Place_Building at 3×, mirroring win32) can clip
+	// the destination on a salvo; Web Audio has no soft-clipper on the output.
+	// A gentle compressor between master and destination prevents the harsh
+	// digital clip without colouring quiet content. Threshold/attack/release
+	// chosen to act as a brick-wall-ish limiter on transients only.
+	audioLimiter = audioCtx.createDynamicsCompressor();
+	audioLimiter.threshold.value = -6;
+	audioLimiter.knee.value      = 0;
+	audioLimiter.ratio.value     = 20;
+	audioLimiter.attack.value    = 0.003;
+	audioLimiter.release.value   = 0.10;
+	audioMasterGain.connect(audioLimiter).connect(audioCtx.destination);
 	applyListener();
 	return audioCtx;
 }
@@ -595,6 +674,11 @@ function musicPickIdx() {
 
 function musicSpawn(idx) {
 	const a = new Audio(new URL(MUSIC_FILES[idx], import.meta.url).href);
+	// Deliberately not setting `crossOrigin` — we never read the music through
+	// Web Audio (no analyser / decode), so plain <audio> playback works
+	// cross-origin without the asset host needing to emit CORS headers. The
+	// earlier `anonymous` setting silently broke playback on CDNs that don't
+	// add Access-Control-Allow-Origin.
 	a.preload = 'auto';
 	a.volume  = 0;
 	const voice = { audio: a, idx, fade: 0 };
@@ -803,8 +887,20 @@ const host = {
 	},
 	js_pop_scissor:       () => { ctx.restore(); },
 	js_toggle_fullscreen: () => {
-		if (!document.fullscreenElement) canvas.requestFullscreen?.();
-		else document.exitFullscreen?.();
+		// Fullscreen the stage, not just `#screen`. The WebGL background
+		// canvas (`#bg`) is a sibling under `#stage`, so requesting fullscreen
+		// on `#screen` alone leaves `#bg` outside the fullscreen element tree
+		// and the browser stops compositing it — the background shader
+		// disappears behind the transparent 2D canvas.
+		// Both calls return Promises; rejection (sandbox iframe without
+		// `allow=fullscreen`, no user gesture, etc.) would surface as an
+		// unhandled rejection. Swallow — fullscreen is best-effort.
+		try {
+			const p = !document.fullscreenElement
+				? bgStage.requestFullscreen?.()
+				: document.exitFullscreen?.();
+			if (p && p.catch) p.catch(() => {});
+		} catch {}
 	},
 	// `window.close()` is blocked in CrazyGames iframes and flagged by review,
 	// so we soft-pause instead: drop gameplay state and let the host decide
@@ -817,7 +913,7 @@ const host = {
 	js_set_listener:      (x, y) => { setListener(x, y); },
 	js_set_master_volume: (v)     => {
 		masterVolume = Math.max(0, Math.min(1, v));
-		if (audioMasterGain) audioMasterGain.gain.value = masterVolume;
+		if (audioMasterGain) audioMasterGain.gain.value = cgMuted ? 0 : masterVolume;
 	},
 	js_set_gameplay_active: (active) => { setGameplayActive(active !== 0); },
 	js_request_midgame_ad:  () => { requestMidgameAd(); },
@@ -958,7 +1054,6 @@ async function fetchWithProgress(url, report) {
 // mobile portrait can be ~360×640). Match both canvases' internal pixel
 // dimensions to the viewport so the game (which renders directly in
 // screen-pixel coords) fills the iframe at 1:1 without letterboxing.
-const bgStage = document.getElementById('stage');
 // Backing-store size matches CSS pixels × devicePixelRatio so the game renders
 // crisp on retina / 4K displays. CSS sizes the canvas at 100vw × 100vh
 // (index.html) so the bigger backing store displays at the same physical

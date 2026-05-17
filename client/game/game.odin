@@ -301,15 +301,15 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	p.listener_x = g.cam.pos.x
 	p.listener_y = g.cam.pos.y
 
-	// FPS readout (rolling, updated 4×/sec).
-	g.fps_accum += dt
-	g.fps_frames += 1
-	if g.fps_accum >= 0.25 {
-		g.fps = f32(g.fps_frames) / g.fps_accum
-		g.frame_ms = (g.fps_accum / f32(g.fps_frames)) * 1000
-		g.fps_accum = 0
-		g.fps_frames = 0
-	}
+	// FPS readout — disabled for release.
+	// g.fps_accum += dt
+	// g.fps_frames += 1
+	// if g.fps_accum >= 0.25 {
+	// 	g.fps = f32(g.fps_frames) / g.fps_accum
+	// 	g.frame_ms = (g.fps_accum / f32(g.fps_frames)) * 1000
+	// 	g.fps_accum = 0
+	// 	g.fps_frames = 0
+	// }
 
 	ui_begin_frame(&g.ui)
 
@@ -411,17 +411,16 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 				p->play_sound(.Emp)
 			}
 		}
-		// F6: skip the surge cooldown and fire the next wave on this frame.
-		// Also latches Core invincibility on so the debug fast-forward can't
-		// kill the run mid-test. Press again to re-fire surges; invincibility
-		// stays on until the next `game_restart`.
-		if p->is_key_just_pressed(.F6) {
-			waves_force_next_surge(&g.world.waves)
-			g.world.core_invincible = true
-			g.world.food  = 10000
-			g.world.scrap = 10000
-			g.world.bomb_cooldown = 0 
-		}
+		// F6 debug fast-forward (skip surge cooldown, latch Core invincibility,
+		// max resources) — disabled for release so it can't be triggered in the
+		// shipped build.
+		// if p->is_key_just_pressed(.F6) {
+		// 	waves_force_next_surge(&g.world.waves)
+		// 	g.world.core_invincible = true
+		// 	g.world.food  = 10000
+		// 	g.world.scrap = 10000
+		// 	g.world.bomb_cooldown = 0
+		// }
 
 		// Space upgrades the selected tile — same affordability/cap rules as
 		// the panel's Upgrade button, just bound to a hotkey for convenience.
@@ -948,10 +947,11 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		}
 	}
 
-	mode_label := g.mode == .Place ? "PLACE (shift = multi)" : "SELECT"
-	stats := fmt.tprintf("fps %.0f  %.2fms  zoom %.2f  hover (%d, %d)  mode: %s  kind: %s",
-		g.fps, g.frame_ms, g.cam.zoom, hover.x, hover.y, mode_label, tile_kind_name(g.selected_kind))
-	p->draw_text(12, sh - 12 - picker_h - 12 - font_small, stats, {0.65, 0.70, 0.78, 1}, .Small)
+	// Debug HUD (fps/ms/zoom/hover/mode) — disabled for release.
+	// mode_label := g.mode == .Place ? "PLACE (shift = multi)" : "SELECT"
+	// stats := fmt.tprintf("fps %.0f  %.2fms  zoom %.2f  hover (%d, %d)  mode: %s  kind: %s",
+	// 	g.fps, g.frame_ms, g.cam.zoom, hover.x, hover.y, mode_label, tile_kind_name(g.selected_kind))
+	// p->draw_text(12, sh - 12 - picker_h - 12 - font_small, stats, {0.65, 0.70, 0.78, 1}, .Small)
 
 	if g.world.game_over || g.world.victory {
 		p->draw_rect(0, 0, sw, sh, {0, 0, 0, 0.65})
