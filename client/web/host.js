@@ -70,6 +70,11 @@ function requestMidgameAd() {
 	if (!cgReady || !CG.ad || typeof CG.ad.requestAd !== 'function') return;
 	if (adInFlight) return;
 	adInFlight = true;
+	// CrazyGames policy: the SDK must see gameplayStop before the midgame ad
+	// request. The game writes gameplay_active=false on the same frame, but it
+	// only reaches JS after game_update returns — so land the edge here, before
+	// requestAd, in case the game-over edge hasn't been flushed yet.
+	setGameplayActive(false);
 	const onStart = () => {
 		// Suspend the AudioContext (cheaper than per-source mutes) and pause
 		// music elements so the ad's audio comes through cleanly.
@@ -1057,7 +1062,13 @@ window.addEventListener('keydown', (e) => {
 	resumeAudio();
 	const k = KEY[e.code];
 	if (k !== undefined) exports.web_key(k, 1);
-	if (PREVENT_DEFAULT.has(e.code)) e.preventDefault();
+	// Only swallow the browser default when no modifier is held — otherwise
+	// we'd intercept Ctrl+R (refresh), Ctrl+W (close tab — usually blocked
+	// anyway), Cmd+Space, etc. The game never binds modified variants of these
+	// keys, so passing them through to the browser is always safe.
+	if (!e.ctrlKey && !e.metaKey && !e.altKey && PREVENT_DEFAULT.has(e.code)) {
+		e.preventDefault();
+	}
 });
 window.addEventListener('keyup', (e) => {
 	const k = KEY[e.code];
