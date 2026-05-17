@@ -265,42 +265,40 @@ function renderBackground(timeSec) {
 
 // --- Audio ------------------------------------------------------------------
 //
-// One <audio>-style buffer pool per family. Indices match the `Sound` enum in
-// client/game/platform.odin: 0=None, 1=Hover, 2=Click, 3=Place, 4=Explode,
-// 5=Turret, 6=Enemy_Attack, 7=Enemy_Die, 8=Emp, 9=Sell, 10=Repair, 11=Upgrade,
-// 12=Flak_Cannon_Loop. We keep N pre-loaded HTMLAudioElements per family and
-// round-robin through them so overlapping plays each get their own playback
-// head — a single Audio element can't play to itself in parallel.
+// All sound files are streamed and decoded into AudioBuffers during the
+// loading-screen phase, so by the time the game starts every play is just a
+// `createBufferSource → start`. Non-spatial and spatial paths both go through
+// the same AudioContext + master gain. Indices match the `Sound` enum in
+// client/game/platform.odin (None=0 … Flak_Cannon_Loop=12).
 //
 // Files are served relative to host.js. `build_web.bat` mirrors `res/` into
 // the web build dir so the dev server (rooted at build/web/) can find them.
 
 const SOUND_FILES = [
 	[],                                                          // None
-	['res/sounds/button-hover.wav'],                       // Button_Hover
-	['res/sounds/button-click.wav'],                       // Button_Click
-	['res/sounds/place_building_1.wav',
-	 'res/sounds/place_building_2.wav'],                   // Place_Building
-	['res/sounds/building-explode.wav'],                   // Building_Explode
-	['res/sounds/blue_laser_1.wav',
-	 'res/sounds/blue_laser_2.wav',
-	 'res/sounds/blue_laser_3.wav'],                    // Turret_Shoot
-	['res/sounds/enemy-attack-01.wav',
-	 'res/sounds/enemy-attack-02.wav',
-	 'res/sounds/enemy-attack-03.wav',
-	 'res/sounds/enemy-attack-04.wav',
-	 'res/sounds/enemy-attack-05.wav'],                    // Enemy_Attack
-	['res/sounds/enemy-die-01.wav',
-	 'res/sounds/enemy-die-02.wav',
-	 'res/sounds/enemy-die-03.wav'],                       // Enemy_Die
-	['res/sounds/emp-sound.wav'],                          // Emp
-	['res/sounds/sell-sound.wav'],                         // Sell
-	['res/sounds/repair-sound.wav'],                       // Repair
-	['res/sounds/ugrade-sound.wav'],                       // Upgrade
-	['res/sounds/flack_cannon.wav'],                       // Flak_Cannon_Loop
+	['res/sounds/button-hover.ogg'],                       // Button_Hover
+	['res/sounds/button-click.ogg'],                       // Button_Click
+	['res/sounds/place_building_1.ogg',
+	 'res/sounds/place_building_2.ogg'],                   // Place_Building
+	['res/sounds/building-explode.ogg'],                   // Building_Explode
+	['res/sounds/blue_laser_1.ogg',
+	 'res/sounds/blue_laser_2.ogg',
+	 'res/sounds/blue_laser_3.ogg'],                    // Turret_Shoot
+	['res/sounds/enemy-attack-01.ogg',
+	 'res/sounds/enemy-attack-02.ogg',
+	 'res/sounds/enemy-attack-03.ogg',
+	 'res/sounds/enemy-attack-04.ogg',
+	 'res/sounds/enemy-attack-05.ogg'],                    // Enemy_Attack
+	['res/sounds/enemy-die-01.ogg',
+	 'res/sounds/enemy-die-02.ogg',
+	 'res/sounds/enemy-die-03.ogg'],                       // Enemy_Die
+	['res/sounds/emp-sound.ogg'],                          // Emp
+	['res/sounds/sell-sound.ogg'],                         // Sell
+	['res/sounds/repair-sound.ogg'],                       // Repair
+	['res/sounds/ugrade-sound.ogg'],                       // Upgrade
+	['res/sounds/flack_cannon.ogg'],                       // Flak_Cannon_Loop
 ];
 
-const POOL_PER_VARIANT = 4; // headroom for overlapping plays of the same wav
 let masterVolume = 1.0;
 
 // Per-family gain multiplier. Mirrors win32 `SOUND_GAIN` so source-mix
@@ -318,47 +316,12 @@ const lastPlayedMs = new Array(SOUND_MIN_INTERVAL_MS.length).fill(-Infinity);
 const SOUND_MAX_VOICES = [0, 0, 0, 2, 2, 3, 2, 2, 0, 0, 0, 0, 0];
 const activeVoiceCount = new Array(SOUND_MAX_VOICES.length).fill(0);
 
-const soundPool = SOUND_FILES.map(variants =>
-	variants.map(src => {
-		const pool = [];
-		for (let i = 0; i < POOL_PER_VARIANT; i++) {
-			const a = new Audio(new URL(src, import.meta.url).href);
-			a.preload = 'auto';
-			pool.push(a);
-		}
-		return { pool, cursor: 0 };
-	})
-);
-
-function playSound(soundIdx) {
-	const variants = soundPool[soundIdx];
-	if (!variants || variants.length === 0) return;
-
-	const minIv = SOUND_MIN_INTERVAL_MS[soundIdx] || 0;
-	const now = performance.now();
-	if (minIv > 0 && now - lastPlayedMs[soundIdx] < minIv) return;
-	lastPlayedMs[soundIdx] = now;
-
-	const v = variants[(Math.random() * variants.length) | 0];
-	const a = v.pool[v.cursor];
-	v.cursor = (v.cursor + 1) % v.pool.length;
-	try {
-		a.volume = Math.min(1, masterVolume * (SOUND_GAIN[soundIdx] ?? 1));
-		a.currentTime = 0;
-		// Browsers reject autoplay until the user has interacted. Ignore the
-		// rejection — once the player clicks or presses a key, subsequent
-		// plays will succeed.
-		a.play().catch(() => {});
-	} catch {}
-}
+// Decoded buffers, same shape as SOUND_FILES (one AudioBuffer per variant).
+// Populated synchronously after `preloadAudio` resolves; null slots mean
+// "decode failed", which the play paths treat as silent drops.
+const audioBuffers = SOUND_FILES.map(v => v.map(_ => null));
 
 // --- Spatial audio (Web Audio API) ------------------------------------------
-//
-// Lazy-init an AudioContext on the first spatial play (browsers gate creation
-// of AudioContexts on a user gesture too, so deferring until the first sound
-// event lines up well with input). We decode each variant once into an
-// AudioBuffer and share it across plays. Each play spins up a transient
-// BufferSourceNode → PannerNode → master gain.
 //
 // Listener tracks the game's camera (set by `js_set_listener`). Pan + distance
 // attenuation map closely to the win32 backend: 1 hex pitch (~72 px) per audio
@@ -369,12 +332,15 @@ const AUDIO_REF_DISTANCE    = 1;
 const AUDIO_MAX_DISTANCE    = 14;
 const AUDIO_ROLLOFF         = 1.0;
 
-let audioCtx       = null;
+let audioCtx        = null;
 let audioMasterGain = null;
-let audioBuffers   = null;       // shape: SOUND_FILES.map(v => v.map(_ => AudioBuffer | Promise))
-let listenerPx     = { x: 0, y: 0 };
+let listenerPx      = { x: 0, y: 0 };
 
-function ensureAudio() {
+// Create the AudioContext eagerly so `decodeAudioData` is available during
+// preload. Browsers create it in `suspended` state without a user gesture and
+// log a warning; we call `resume()` on the first input event (see the
+// mousedown / keydown handlers below). Decode works regardless of state.
+function initAudioContext() {
 	if (audioCtx) return audioCtx;
 	const Ctx = window.AudioContext || window.webkitAudioContext;
 	if (!Ctx) return null;
@@ -382,20 +348,72 @@ function ensureAudio() {
 	audioMasterGain = audioCtx.createGain();
 	audioMasterGain.gain.value = masterVolume;
 	audioMasterGain.connect(audioCtx.destination);
-	// Kick off decode of every variant. Plays that race the decode just drop;
-	// once the buffer resolves subsequent plays use it.
-	audioBuffers = SOUND_FILES.map(variants =>
-		variants.map(src => {
-			const url = new URL(src, import.meta.url).href;
-			return fetch(url)
-				.then(r => r.arrayBuffer())
-				.then(buf => audioCtx.decodeAudioData(buf))
-				.catch(() => null);
-		})
-	);
-	// Apply the listener pos we may have already received before init.
 	applyListener();
 	return audioCtx;
+}
+
+function resumeAudio() {
+	if (audioCtx && audioCtx.state === 'suspended') {
+		audioCtx.resume().catch(() => {});
+	}
+}
+
+// Streams every sound file and decodes it into `audioBuffers`. `report(url,
+// total, received)` is called as bytes arrive so the splash progress bar can
+// account for these as well as the wasm. Resolves once every variant has
+// either decoded successfully or failed (failures are non-fatal — the slot
+// stays null and plays of that variant drop silently).
+async function preloadAudio(report) {
+	const ctx = initAudioContext();
+	if (!ctx) return;
+
+	const tasks = [];
+	for (let si = 0; si < SOUND_FILES.length; si++) {
+		const variants = SOUND_FILES[si];
+		for (let vi = 0; vi < variants.length; vi++) {
+			const url = new URL(variants[vi], import.meta.url).href;
+			tasks.push((async () => {
+				try {
+					const bytes = await fetchWithProgress(url, report);
+					// decodeAudioData detaches the input ArrayBuffer on some
+					// engines, so slice into a fresh one we own.
+					const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+					const buf = await new Promise((resolve, reject) => {
+						// Both promise- and callback-style overloads exist;
+						// the callback form works in every browser we care
+						// about including older Safari.
+						ctx.decodeAudioData(ab, resolve, reject);
+					});
+					audioBuffers[si][vi] = buf;
+				} catch (err) {
+					console.warn('audio preload failed:', url, err);
+				}
+			})());
+		}
+	}
+	await Promise.all(tasks);
+}
+
+function playSound(soundIdx) {
+	const variants = SOUND_FILES[soundIdx];
+	if (!variants || variants.length === 0 || !audioCtx) return;
+	resumeAudio();
+
+	const minIv = SOUND_MIN_INTERVAL_MS[soundIdx] || 0;
+	const now = performance.now();
+	if (minIv > 0 && now - lastPlayedMs[soundIdx] < minIv) return;
+	lastPlayedMs[soundIdx] = now;
+
+	const variantIdx = (Math.random() * variants.length) | 0;
+	const buf = audioBuffers[soundIdx][variantIdx];
+	if (!buf) return;
+
+	const src = audioCtx.createBufferSource();
+	src.buffer = buf;
+	const gain = audioCtx.createGain();
+	gain.gain.value = Math.min(1, SOUND_GAIN[soundIdx] ?? 1);
+	src.connect(gain).connect(audioMasterGain);
+	src.start();
 }
 
 function applyListener() {
@@ -422,10 +440,8 @@ function setListener(xPx, yPx) {
 
 function playSoundAt(soundIdx, xPx, yPx) {
 	const variants = SOUND_FILES[soundIdx];
-	if (!variants || variants.length === 0) return;
-	const ctx = ensureAudio();
-	if (!ctx) return;
-	if (ctx.state === 'suspended') ctx.resume();
+	if (!variants || variants.length === 0 || !audioCtx) return;
+	resumeAudio();
 
 	// Share the per-family cooldown with the non-spatial path so a salvo of
 	// turret shots and a UI click of the same family don't fight each other.
@@ -437,39 +453,35 @@ function playSoundAt(soundIdx, xPx, yPx) {
 	const maxVoices = SOUND_MAX_VOICES[soundIdx] || 0;
 	if (maxVoices > 0 && activeVoiceCount[soundIdx] >= maxVoices) return;
 
+	const variantIdx = (Math.random() * variants.length) | 0;
+	const buf = audioBuffers[soundIdx][variantIdx];
+	if (!buf) return;
+
 	lastPlayedMs[soundIdx] = now;
 	activeVoiceCount[soundIdx]++;
 
-	const variantIdx = (Math.random() * variants.length) | 0;
-	const entry = audioBuffers[soundIdx][variantIdx];
-	// Buffers are stored as Promises until decode lands; resolved ones become
-	// the AudioBuffer directly via the .then below.
-	Promise.resolve(entry).then(buf => {
-		if (!buf || !audioCtx) {
-			activeVoiceCount[soundIdx]--;
-			return;
-		}
-		const src = audioCtx.createBufferSource();
-		src.buffer = buf;
-		src.onended = () => { activeVoiceCount[soundIdx]--; };
-		const panner = audioCtx.createPanner();
-		panner.panningModel    = 'HRTF';
-		panner.distanceModel   = 'linear';
-		panner.refDistance     = AUDIO_REF_DISTANCE;
-		panner.maxDistance     = AUDIO_MAX_DISTANCE;
-		panner.rolloffFactor   = AUDIO_ROLLOFF;
-		const x = xPx / AUDIO_PIXELS_PER_UNIT;
-		const z = yPx / AUDIO_PIXELS_PER_UNIT;
-		if (panner.positionX) {
-			panner.positionX.value = x;
-			panner.positionY.value = 0;
-			panner.positionZ.value = z;
-		} else if (panner.setPosition) {
-			panner.setPosition(x, 0, z);
-		}
-		src.connect(panner).connect(audioMasterGain);
-		src.start();
-	}).catch(() => {});
+	const src = audioCtx.createBufferSource();
+	src.buffer = buf;
+	src.onended = () => { activeVoiceCount[soundIdx]--; };
+	const gain = audioCtx.createGain();
+	gain.gain.value = Math.min(1, SOUND_GAIN[soundIdx] ?? 1);
+	const panner = audioCtx.createPanner();
+	panner.panningModel    = 'HRTF';
+	panner.distanceModel   = 'linear';
+	panner.refDistance     = AUDIO_REF_DISTANCE;
+	panner.maxDistance     = AUDIO_MAX_DISTANCE;
+	panner.rolloffFactor   = AUDIO_ROLLOFF;
+	const x = xPx / AUDIO_PIXELS_PER_UNIT;
+	const z = yPx / AUDIO_PIXELS_PER_UNIT;
+	if (panner.positionX) {
+		panner.positionX.value = x;
+		panner.positionY.value = 0;
+		panner.positionZ.value = z;
+	} else if (panner.setPosition) {
+		panner.setPosition(x, 0, z);
+	}
+	src.connect(gain).connect(panner).connect(audioMasterGain);
+	src.start();
 }
 
 // Looped spatial voices, one per Sound family. Driven by `js_set_sound_loop`
@@ -490,9 +502,8 @@ function setSoundLoop(soundIdx, active, xPx, yPx) {
 		loopVoices[soundIdx] = null;
 		return;
 	}
-	const ctx = ensureAudio();
-	if (!ctx) return;
-	if (ctx.state === 'suspended') ctx.resume();
+	if (!audioCtx) return;
+	resumeAudio();
 
 	const x = xPx / AUDIO_PIXELS_PER_UNIT;
 	const z = yPx / AUDIO_PIXELS_PER_UNIT;
@@ -503,37 +514,30 @@ function setSoundLoop(soundIdx, active, xPx, yPx) {
 		return;
 	}
 	const variantIdx = (Math.random() * variants.length) | 0;
-	const entry = audioBuffers[soundIdx][variantIdx];
-	// Slot the voice eagerly so reentrant calls in the same frame don't
-	// double-start while the decode promise is in flight.
-	const slot = {};
-	loopVoices[soundIdx] = slot;
-	Promise.resolve(entry).then(buf => {
-		if (!buf || !audioCtx || loopVoices[soundIdx] !== slot) {
-			if (loopVoices[soundIdx] === slot) loopVoices[soundIdx] = null;
-			return;
-		}
-		const src = audioCtx.createBufferSource();
-		src.buffer = buf;
-		src.loop = true;
-		const panner = audioCtx.createPanner();
-		panner.panningModel  = 'HRTF';
-		panner.distanceModel = 'linear';
-		panner.refDistance   = AUDIO_REF_DISTANCE;
-		panner.maxDistance   = AUDIO_MAX_DISTANCE;
-		panner.rolloffFactor = AUDIO_ROLLOFF;
-		if (panner.positionX) {
-			panner.positionX.value = x;
-			panner.positionY.value = 0;
-			panner.positionZ.value = z;
-		} else if (panner.setPosition) {
-			panner.setPosition(x, 0, z);
-		}
-		src.connect(panner).connect(audioMasterGain);
-		src.start();
-		slot.src = src;
-		slot.panner = panner;
-	}).catch(() => { if (loopVoices[soundIdx] === slot) loopVoices[soundIdx] = null; });
+	const buf = audioBuffers[soundIdx][variantIdx];
+	if (!buf) return;
+
+	const src = audioCtx.createBufferSource();
+	src.buffer = buf;
+	src.loop = true;
+	const gain = audioCtx.createGain();
+	gain.gain.value = Math.min(1, SOUND_GAIN[soundIdx] ?? 1);
+	const panner = audioCtx.createPanner();
+	panner.panningModel  = 'HRTF';
+	panner.distanceModel = 'linear';
+	panner.refDistance   = AUDIO_REF_DISTANCE;
+	panner.maxDistance   = AUDIO_MAX_DISTANCE;
+	panner.rolloffFactor = AUDIO_ROLLOFF;
+	if (panner.positionX) {
+		panner.positionX.value = x;
+		panner.positionY.value = 0;
+		panner.positionZ.value = z;
+	} else if (panner.setPosition) {
+		panner.setPosition(x, 0, z);
+	}
+	src.connect(gain).connect(panner).connect(audioMasterGain);
+	src.start();
+	loopVoices[soundIdx] = { src, panner };
 }
 
 // Camera: we apply the (scale, offset) manually inside each draw call so the
@@ -725,6 +729,42 @@ const odin_env = new Proxy(libm, {
 
 const imports = { host, odin_env, env: odin_env };
 
+// --- Streaming fetch with progress -----------------------------------------
+//
+// Used to drive the splash bar for both the wasm and every sound file. The
+// caller passes a `report(url, total, received)` callback (or null); we tally
+// bytes as chunks arrive. If Content-Length is missing (some CDNs strip it
+// with chunked encoding) we report only `received` and the bar's denominator
+// stays approximate — the progress estimator below copes by averaging.
+async function fetchWithProgress(url, report) {
+	const resp = await fetch(url);
+	if (!resp.ok) throw new Error(url + ': ' + resp.status);
+	const total = parseInt(resp.headers.get('Content-Length') || '0', 10) || 0;
+	if (report) report(url, total, 0);
+
+	const reader = resp.body && resp.body.getReader ? resp.body.getReader() : null;
+	if (!reader) {
+		// Old browser without ReadableStream — just buffer it whole.
+		const bytes = new Uint8Array(await resp.arrayBuffer());
+		if (report) report(url, bytes.byteLength, bytes.byteLength);
+		return bytes;
+	}
+
+	const chunks = [];
+	let received = 0;
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		chunks.push(value);
+		received += value.byteLength;
+		if (report) report(url, total || received, received);
+	}
+	const out = new Uint8Array(received);
+	let off = 0;
+	for (const c of chunks) { out.set(c, off); off += c.byteLength; }
+	return out;
+}
+
 // --- Responsive sizing ------------------------------------------------------
 // CrazyGames embeds in iframes of varying sizes (desktop ~1280×720 default,
 // mobile portrait can be ~360×640). Match both canvases' internal pixel
@@ -753,6 +793,10 @@ canvas.addEventListener('mousemove', (e) => {
 });
 canvas.addEventListener('mousedown', (e) => {
 	canvas.focus();
+	// First input event: resume the AudioContext (browsers create it in
+	// `suspended` without a user gesture). resume() is idempotent on an
+	// already-running context.
+	resumeAudio();
 	if (e.button === 0) mouseLeft  = 1;
 	if (e.button === 2) mouseRight = 1;
 });
@@ -769,6 +813,7 @@ canvas.addEventListener('wheel', (e) => {
 const PREVENT_DEFAULT = new Set(['Tab', 'Space', ...Object.keys(KEY)]);
 
 window.addEventListener('keydown', (e) => {
+	resumeAudio();
 	const k = KEY[e.code];
 	if (k !== undefined) exports.web_key(k, 1);
 	if (PREVENT_DEFAULT.has(e.code)) e.preventDefault();
@@ -798,45 +843,41 @@ let exports;
 		};
 		callLoadingStart();
 
-		// Stream the wasm so we can drive the splash progress bar. We can't use
-		// WebAssembly.instantiateStreaming here because that consumes the
-		// Response directly — instead we read the body in chunks, tally bytes
-		// against Content-Length, and hand the assembled buffer to instantiate.
-		const url = new URL('client.wasm', import.meta.url);
-		const response = await fetch(url);
-		if (!response.ok) throw new Error('wasm fetch failed: ' + response.status);
-
-		const total = parseInt(response.headers.get('Content-Length') || '0', 10);
-		let received = 0;
-		const chunks = [];
-		const reader = response.body && response.body.getReader ? response.body.getReader() : null;
-		if (reader) {
-			for (;;) {
-				const { done, value } = await reader.read();
-				if (done) break;
-				chunks.push(value);
-				received += value.byteLength;
-				if (total > 0) setProgress(received / total);
-				else           setProgress(0.5); // indeterminate-ish: park at half
+		// Combined-progress book-keeping. One entry per URL we fetch (wasm +
+		// every sound). `total` is whatever the server reports; if a server
+		// strips Content-Length we fall back to "treat received as total so
+		// far", which means the bar floats up to ~100% by the time everything
+		// finishes (without ever appearing to go backwards).
+		const progressItems = new Map();
+		const reportProgress = (url, total, received) => {
+			progressItems.set(url, { total: total || received || 0, received });
+			let r = 0, t = 0;
+			for (const p of progressItems.values()) { r += p.received; t += p.total; }
+			setProgress(t > 0 ? r / t : 0);
+			// Friendly status text: "loading… 4.2 / 8.1 MB"
+			if (t > 0) {
+				const mb = (b) => (b / (1024 * 1024)).toFixed(1);
+				setStatus('loading…  ' + mb(r) + ' / ' + mb(t) + ' MB');
 			}
-		} else {
-			// No streaming body available (very old browser); fall back to a
-			// blocking arrayBuffer and jump straight to 100%.
-			chunks.push(new Uint8Array(await response.arrayBuffer()));
-			received = chunks[0].byteLength;
-		}
-		setProgress(1);
+		};
 
-		// Concatenate into a single buffer for instantiate.
-		const wasmBytes = new Uint8Array(received);
-		{
-			let off = 0;
-			for (const c of chunks) { wasmBytes.set(c, off); off += c.byteLength; }
-		}
+		// Fetch wasm and every sound file in parallel so the progress bar
+		// reflects the true wait. Audio decode runs as each fetch completes.
+		const wasmUrl = new URL('client.wasm', import.meta.url).href;
+		const wasmBytesPromise = fetchWithProgress(wasmUrl, reportProgress);
+		const audioPromise     = preloadAudio(reportProgress);
+
+		const wasmBytes = await wasmBytesPromise;
 		setStatus('initializing…');
 		const result = await WebAssembly.instantiate(wasmBytes, imports);
 		exports = result.instance.exports;
 		memory  = exports.memory;
+
+		// Wait for audio decode to finish too so the splash doesn't disappear
+		// while the player is still waiting for sounds to be ready.
+		await audioPromise;
+		setProgress(1);
+
 		initBackgroundGL();
 		exports.web_init();
 		hideSplash();
