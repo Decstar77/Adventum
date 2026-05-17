@@ -193,9 +193,10 @@ function renderBackground(timeSec) {
 //
 // One <audio>-style buffer pool per family. Indices match the `Sound` enum in
 // client/game/platform.odin: 0=None, 1=Hover, 2=Click, 3=Place, 4=Explode,
-// 5=Turret, 6=Enemy_Attack, 7=Enemy_Die. We keep N pre-loaded HTMLAudioElements
-// per family and round-robin through them so overlapping plays each get their
-// own playback head — a single Audio element can't play to itself in parallel.
+// 5=Turret, 6=Enemy_Attack, 7=Enemy_Die, 8=Emp, 9=Sell, 10=Repair, 11=Upgrade,
+// 12=Flak_Cannon_Loop. We keep N pre-loaded HTMLAudioElements per family and
+// round-robin through them so overlapping plays each get their own playback
+// head — a single Audio element can't play to itself in parallel.
 //
 // Files are served relative to host.js. `build_web.bat` mirrors `res/` into
 // the web build dir so the dev server (rooted at build/web/) can find them.
@@ -218,22 +219,29 @@ const SOUND_FILES = [
 	['res/sounds/enemy-die-01.wav',
 	 'res/sounds/enemy-die-02.wav',
 	 'res/sounds/enemy-die-03.wav'],                       // Enemy_Die
+	['res/sounds/emp-sound.wav'],                          // Emp
+	['res/sounds/sell-sound.wav'],                         // Sell
+	['res/sounds/repair-sound.wav'],                       // Repair
+	['res/sounds/ugrade-sound.wav'],                       // Upgrade
+	['res/sounds/flack_cannon.wav'],                       // Flak_Cannon_Loop
 ];
 
 const POOL_PER_VARIANT = 4; // headroom for overlapping plays of the same wav
 let masterVolume = 1.0;
 
+// Per-family gain multiplier. Mirrors win32 `SOUND_GAIN` so source-mix
+// differences are evened out the same way in both backends.
+const SOUND_GAIN = [1.0, 0.3, 0.3, 3.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+
 // Per-family minimum gap between consecutive plays. Mirrors the win32 host's
 // table; together with the per-frame coalescer in the game, it stops a synced
 // salvo (18 turrets on one tick) and rapid cross-frame repeats from stacking.
-// Indices match the Sound enum: 0=None, 1=Hover, 2=Click, 3=Place, 4=Explode,
-// 5=Turret, 6=Enemy_Attack, 7=Enemy_Die.
-const SOUND_MIN_INTERVAL_MS = [0, 50, 0, 0, 120, 110, 140, 110];
+const SOUND_MIN_INTERVAL_MS = [0, 50, 0, 0, 120, 110, 140, 110, 0, 0, 0, 0, 0];
 const lastPlayedMs = new Array(SOUND_MIN_INTERVAL_MS.length).fill(-Infinity);
 
 // Max concurrent positional voices per family. Spatial plays that exceed the
 // cap are dropped; non-positional plays don't count toward this.
-const SOUND_MAX_VOICES = [0, 0, 0, 2, 2, 3, 2, 2];
+const SOUND_MAX_VOICES = [0, 0, 0, 2, 2, 3, 2, 2, 0, 0, 0, 0, 0];
 const activeVoiceCount = new Array(SOUND_MAX_VOICES.length).fill(0);
 
 const soundPool = SOUND_FILES.map(variants =>
@@ -261,7 +269,7 @@ function playSound(soundIdx) {
 	const a = v.pool[v.cursor];
 	v.cursor = (v.cursor + 1) % v.pool.length;
 	try {
-		a.volume = masterVolume;
+		a.volume = Math.min(1, masterVolume * (SOUND_GAIN[soundIdx] ?? 1));
 		a.currentTime = 0;
 		// Browsers reject autoplay until the user has interacted. Ignore the
 		// rejection — once the player clicks or presses a key, subsequent
@@ -390,6 +398,70 @@ function playSoundAt(soundIdx, xPx, yPx) {
 	}).catch(() => {});
 }
 
+// Looped spatial voices, one per Sound family. Driven by `js_set_sound_loop`
+// the same way the win32 backend uses `audio_set_loop` — the game flips this
+// each frame based on whether any flak cannon is firing; the source stays alive
+// across frames and just moves as the emitter centroid drifts.
+const loopVoices = new Array(SOUND_FILES.length).fill(null);
+
+function setSoundLoop(soundIdx, active, xPx, yPx) {
+	const variants = SOUND_FILES[soundIdx];
+	if (!variants || variants.length === 0) return;
+	const existing = loopVoices[soundIdx];
+	if (!active) {
+		if (!existing) return;
+		try { existing.src.stop(); } catch {}
+		try { existing.src.disconnect(); } catch {}
+		try { existing.panner.disconnect(); } catch {}
+		loopVoices[soundIdx] = null;
+		return;
+	}
+	const ctx = ensureAudio();
+	if (!ctx) return;
+	if (ctx.state === 'suspended') ctx.resume();
+
+	const x = xPx / AUDIO_PIXELS_PER_UNIT;
+	const z = yPx / AUDIO_PIXELS_PER_UNIT;
+	if (existing) {
+		const p = existing.panner;
+		if (p.positionX) { p.positionX.value = x; p.positionZ.value = z; }
+		else if (p.setPosition) p.setPosition(x, 0, z);
+		return;
+	}
+	const variantIdx = (Math.random() * variants.length) | 0;
+	const entry = audioBuffers[soundIdx][variantIdx];
+	// Slot the voice eagerly so reentrant calls in the same frame don't
+	// double-start while the decode promise is in flight.
+	const slot = {};
+	loopVoices[soundIdx] = slot;
+	Promise.resolve(entry).then(buf => {
+		if (!buf || !audioCtx || loopVoices[soundIdx] !== slot) {
+			if (loopVoices[soundIdx] === slot) loopVoices[soundIdx] = null;
+			return;
+		}
+		const src = audioCtx.createBufferSource();
+		src.buffer = buf;
+		src.loop = true;
+		const panner = audioCtx.createPanner();
+		panner.panningModel  = 'HRTF';
+		panner.distanceModel = 'linear';
+		panner.refDistance   = AUDIO_REF_DISTANCE;
+		panner.maxDistance   = AUDIO_MAX_DISTANCE;
+		panner.rolloffFactor = AUDIO_ROLLOFF;
+		if (panner.positionX) {
+			panner.positionX.value = x;
+			panner.positionY.value = 0;
+			panner.positionZ.value = z;
+		} else if (panner.setPosition) {
+			panner.setPosition(x, 0, z);
+		}
+		src.connect(panner).connect(audioMasterGain);
+		src.start();
+		slot.src = src;
+		slot.panner = panner;
+	}).catch(() => { if (loopVoices[soundIdx] === slot) loopVoices[soundIdx] = null; });
+}
+
 // Camera: we apply the (scale, offset) manually inside each draw call so the
 // canvas's save/restore stack stays free for scissor clipping.
 let cam = { sx: 1, sy: 1, ox: 0, oy: 0 };
@@ -482,15 +554,15 @@ const host = {
 };
 
 // --- Input mapping. Indices must match the Key enum in client/game/platform.odin.
-// 0=Unknown, then W,A,S,D, C,B,R,V,N,Q,E, Num1..Num7, Escape, Enter, Space,
+// 0=Unknown, then W,A,S,D, C,B,R,V,N,Q,E,F, Num1..Num7, Escape, Enter, Space,
 // Left_Shift, Right_Shift, F6. If you reorder the Odin enum, update this table.
 const KEY = {
 	KeyW: 1, KeyA: 2, KeyS: 3, KeyD: 4,
-	KeyC: 5, KeyB: 6, KeyR: 7, KeyV: 8, KeyN: 9, KeyQ: 10, KeyE: 11,
-	Digit1: 12, Digit2: 13, Digit3: 14, Digit4: 15, Digit5: 16, Digit6: 17, Digit7: 18,
-	Escape: 19, Enter: 20, Space: 21,
-	ShiftLeft: 22, ShiftRight: 23,
-	F6: 24,
+	KeyC: 5, KeyB: 6, KeyR: 7, KeyV: 8, KeyN: 9, KeyQ: 10, KeyE: 11, KeyF: 12,
+	Digit1: 13, Digit2: 14, Digit3: 15, Digit4: 16, Digit5: 17, Digit6: 18, Digit7: 19,
+	Escape: 20, Enter: 21, Space: 22,
+	ShiftLeft: 23, ShiftRight: 24,
+	F6: 25,
 };
 
 // Odin's `js_wasm32` runtime links the C99 libm trig/exp/log/round helpers as

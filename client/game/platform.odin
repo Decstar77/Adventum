@@ -26,6 +26,10 @@ Sound :: enum {
 	Turret_Shoot,
 	Enemy_Attack,
 	Enemy_Die,
+	Emp,
+	Sell,
+	Repair,
+	Upgrade,
 	// Looping family — driven by `set_sound_loop` rather than `play_sound`. The
 	// underlying wav is designed as a continuous spray, so the host plays a
 	// single looped instance that the game toggles on while any flak gun is

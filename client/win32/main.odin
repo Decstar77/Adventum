@@ -83,6 +83,7 @@ main :: proc() {
 		fmt.eprintln("audio disabled")
 	}
 	defer audio_shutdown(&app.audio)
+	audio_set_music_enabled(&app.audio, true)
 
 	// Build the Platform once; per-frame state is refreshed at the top of the
 	// loop, fn pointers stay constant.

@@ -44,6 +44,10 @@ SOUND_MIN_INTERVAL := [game.Sound]time.Duration{
 	.Turret_Shoot     = 110 * time.Millisecond,
 	.Enemy_Attack     = 140 * time.Millisecond,
 	.Enemy_Die        = 110 * time.Millisecond,
+	.Emp              = 0,
+	.Sell             = 0,
+	.Repair           = 0,
+	.Upgrade          = 0,
 	.Flak_Cannon_Loop = 0,
 }
 
@@ -60,7 +64,31 @@ SOUND_MAX_VOICES := [game.Sound]i32{
 	.Turret_Shoot     = 3,
 	.Enemy_Attack     = 2,
 	.Enemy_Die        = 2,
+	.Emp              = 0, // UI-style one-shot; no positional plays
+	.Sell             = 0,
+	.Repair           = 0,
+	.Upgrade          = 0,
 	.Flak_Cannon_Loop = 0, // managed via set_sound_loop, not the active-voice pool
+}
+
+// Per-family gain multiplier applied at play time. Source wavs were mixed at
+// different levels, so this is the per-sound calibration knob — bump or cut
+// here by ear rather than re-encoding the asset. 1.0 = unchanged.
+@(private="file")
+SOUND_GAIN := [game.Sound]f32{
+	.None             = 1.0,
+	.Button_Hover     = 0.3,
+	.Button_Click     = 0.3,
+	.Place_Building   = 3.0,
+	.Building_Explode = 1.0,
+	.Turret_Shoot     = 1.0,
+	.Enemy_Attack     = 1.0,
+	.Enemy_Die        = 1.0,
+	.Emp              = 1.0,
+	.Sell             = 1.0,
+	.Repair           = 1.0,
+	.Upgrade          = 1.0,
+	.Flak_Cannon_Loop = 1.0,
 }
 
 // Variants per family. Order matches `res/sounds/`; randomly sampled at play.
@@ -88,8 +116,31 @@ SOUND_FILES := [game.Sound][]string{
 		"res/sounds/enemy-die-02.wav",
 		"res/sounds/enemy-die-03.wav",
 	},
+	.Emp              = {"res/sounds/emp-sound.wav"},
+	.Sell             = {"res/sounds/sell-sound.wav"},
+	.Repair           = {"res/sounds/repair-sound.wav"},
+	.Upgrade          = {"res/sounds/ugrade-sound.wav"},
 	.Flak_Cannon_Loop = {"res/sounds/flack_cannon.wav"},
 }
+
+// Music tracks. miniaudio decodes mp3 natively, and we stream them from disk
+// (the .STREAM flag) so a 3-minute track costs a small ring buffer rather than
+// ~30 MB of decoded PCM.
+@(private="file")
+MUSIC_FILES := []string{
+	"res/sounds/music-01.mp3",
+	"res/sounds/music-02.mp3",
+	"res/sounds/music-03.mp3",
+}
+
+// Crossfade duration between consecutive tracks. Also used as the lead time
+// when scheduling the next track — we start the incoming track this many ms
+// before the current one ends so the fades overlap exactly.
+@(private="file")
+MUSIC_CROSSFADE_MS :: u64(3000)
+
+@(private="file")
+MUSIC_DEFAULT_VOLUME :: f32(0.5)
 
 // Pixels per audio unit. One hex pitch (1.5 × HEX_SIZE = 72) is a reasonable
 // "1 meter" — at the default linear rolloff that gives us a few-hex audible
@@ -120,6 +171,23 @@ Audio :: struct {
 	// Looped voices, one per family. Started/stopped on transition by
 	// `audio_set_loop`; null entries mean "not currently playing".
 	loops:       [game.Sound]^ma.sound,
+	music:       Music,
+}
+
+// Background music with shuffled track order and crossfades on transition.
+// During a crossfade both `current` and `incoming` are live and the older one
+// is uninited once it finishes its fade-out; the rest of the time `incoming`
+// is nil. `bag` holds the indices of tracks not yet played in this shuffle
+// round; when it empties we refill and reshuffle, swapping the first two
+// entries if the leading track would repeat the one we just finished.
+Music :: struct {
+	enabled:  bool,
+	volume:   f32,
+	cpaths:   [dynamic]cstring,
+	bag:      [dynamic]int,
+	last_idx: int,
+	current:  ^ma.sound,
+	incoming: ^ma.sound,
 }
 
 audio_init :: proc(a: ^Audio) -> bool {
@@ -132,6 +200,11 @@ audio_init :: proc(a: ^Audio) -> bool {
 			append(&a.cpaths[sound], strings.clone_to_cstring(path))
 		}
 	}
+	for path in MUSIC_FILES {
+		append(&a.music.cpaths, strings.clone_to_cstring(path))
+	}
+	a.music.volume   = MUSIC_DEFAULT_VOLUME
+	a.music.last_idx = -1
 	a.ready = true
 	return true
 }
@@ -152,6 +225,19 @@ audio_shutdown :: proc(a: ^Audio) {
 		free(s)
 		a.loops[kind] = nil
 	}
+	if a.music.current != nil {
+		ma.sound_uninit(a.music.current)
+		free(a.music.current)
+		a.music.current = nil
+	}
+	if a.music.incoming != nil {
+		ma.sound_uninit(a.music.incoming)
+		free(a.music.incoming)
+		a.music.incoming = nil
+	}
+	for cs in a.music.cpaths do delete(cs)
+	delete(a.music.cpaths)
+	delete(a.music.bag)
 	ma.engine_uninit(&a.engine)
 	for variants in &a.cpaths {
 		for cs in variants do delete(cs)
@@ -185,6 +271,118 @@ audio_tick :: proc(a: ^Audio) {
 			free(v.sound)
 			unordered_remove(&a.active, i)
 		}
+	}
+	music_tick(a)
+}
+
+// Enable or disable the music shuffle. On enable the first track fades in;
+// on disable the current track (and any in-progress incoming) fades out and
+// is freed.
+audio_set_music_enabled :: proc(a: ^Audio, on: bool) {
+	if !a.ready do return
+	if a.music.enabled == on do return
+	a.music.enabled = on
+	if !on {
+		if a.music.current != nil {
+			ma.sound_set_fade_in_milliseconds(a.music.current, -1, 0, MUSIC_CROSSFADE_MS)
+			ma.sound_uninit(a.music.current) // miniaudio finishes the fade-out internally before freeing
+			free(a.music.current)
+			a.music.current = nil
+		}
+		if a.music.incoming != nil {
+			ma.sound_uninit(a.music.incoming)
+			free(a.music.incoming)
+			a.music.incoming = nil
+		}
+	}
+}
+
+audio_set_music_volume :: proc(a: ^Audio, v: f32) {
+	if !a.ready do return
+	a.music.volume = v
+	// Apply to whichever voice isn't currently inside an automated fade.
+	// `set_volume` overrides the fade target; we only touch `current` here
+	// because `incoming` is mid-fade-in and will land on its own target.
+	if a.music.current != nil && a.music.incoming == nil {
+		ma.sound_set_volume(a.music.current, v)
+	}
+}
+
+// Pick the next track index from the shuffle bag, refilling when empty.
+// Ensures the lead track of a fresh bag isn't the same one we just finished.
+@(private="file")
+music_pick :: proc(m: ^Music) -> (int, bool) {
+	if len(m.cpaths) == 0 do return 0, false
+	if len(m.bag) == 0 {
+		for i in 0..<len(m.cpaths) do append(&m.bag, i)
+		rand.shuffle(m.bag[:])
+		if len(m.bag) > 1 && m.bag[len(m.bag)-1] == m.last_idx {
+			m.bag[len(m.bag)-1], m.bag[0] = m.bag[0], m.bag[len(m.bag)-1]
+		}
+	}
+	idx := pop(&m.bag)
+	m.last_idx = idx
+	return idx, true
+}
+
+// Start a new music voice fading in 0 → music.volume over `fade_ms`.
+@(private="file")
+music_start :: proc(a: ^Audio, fade_ms: u64) -> ^ma.sound {
+	idx, ok := music_pick(&a.music)
+	if !ok do return nil
+	s := new(ma.sound)
+	flags := ma.sound_flags{.STREAM, .NO_PITCH, .NO_SPATIALIZATION}
+	if res := ma.sound_init_from_file(&a.engine, a.music.cpaths[idx], flags, nil, nil, s); res != .SUCCESS {
+		free(s)
+		return nil
+	}
+	ma.sound_set_volume(s, a.music.volume)
+	ma.sound_set_fade_in_milliseconds(s, 0, a.music.volume, fade_ms)
+	if res := ma.sound_start(s); res != .SUCCESS {
+		ma.sound_uninit(s)
+		free(s)
+		return nil
+	}
+	return s
+}
+
+@(private="file")
+music_tick :: proc(a: ^Audio) {
+	m := &a.music
+	if !m.enabled do return
+
+	// Promote a finished outgoing track once its crossfade has elapsed and
+	// playback has actually stopped. `sound_is_playing` flips false on its
+	// own when the stream hits EOF.
+	if m.incoming != nil && m.current != nil && !bool(ma.sound_is_playing(m.current)) {
+		ma.sound_uninit(m.current)
+		free(m.current)
+		m.current = m.incoming
+		m.incoming = nil
+	}
+
+	// Cold start: no track yet, just begin one.
+	if m.current == nil {
+		m.current = music_start(a, MUSIC_CROSSFADE_MS)
+		return
+	}
+
+	// Already crossfading — nothing more to schedule until it resolves.
+	if m.incoming != nil do return
+
+	// Schedule the next track when the current one is within one crossfade
+	// of finishing. Streams can briefly report length == 0 while the header
+	// is still being read — skip until we have a real duration.
+	cursor: f32
+	length: f32
+	if ma.sound_get_cursor_in_seconds(m.current, &cursor) != .SUCCESS do return
+	if ma.sound_get_length_in_seconds(m.current, &length) != .SUCCESS do return
+	if length <= 0 do return
+
+	remaining_ms := u64(max(0, (length - cursor)) * 1000)
+	if remaining_ms <= MUSIC_CROSSFADE_MS {
+		ma.sound_set_fade_in_milliseconds(m.current, -1, 0, MUSIC_CROSSFADE_MS)
+		m.incoming = music_start(a, MUSIC_CROSSFADE_MS)
 	}
 }
 
@@ -239,6 +437,7 @@ audio_set_loop :: proc(a: ^Audio, sound: game.Sound, active: bool, x_px, y_px: f
 		ma.sound_set_max_distance(s, AUDIO_MAX_DISTANCE)
 		ma.sound_set_rolloff(s, AUDIO_ROLLOFF)
 		ma.sound_set_position(s, x, 0, z)
+		ma.sound_set_volume(s, SOUND_GAIN[sound])
 		if res := ma.sound_start(s); res != .SUCCESS {
 			ma.sound_uninit(s)
 			free(s)
@@ -261,9 +460,22 @@ audio_play :: proc(a: ^Audio, sound: game.Sound) {
 	if min_iv > 0 && time.tick_diff(a.last_played[sound], now) < min_iv do return
 	a.last_played[sound] = now
 
-	// MA_SOUND_FLAG_NO_SPATIALIZATION skips the panner entirely — UI sounds
-	// should be dead-centre regardless of where the listener is.
-	_ = ma.engine_play_sound(&a.engine, path, nil)
+	// Managed sound (rather than engine_play_sound) so we can apply the per-
+	// family gain via sound_set_volume. NO_SPATIALIZATION skips the panner —
+	// UI sounds should be dead-centre regardless of where the listener is.
+	s := new(ma.sound)
+	flags := ma.sound_flags{.NO_PITCH, .NO_SPATIALIZATION}
+	if res := ma.sound_init_from_file(&a.engine, path, flags, nil, nil, s); res != .SUCCESS {
+		free(s)
+		return
+	}
+	ma.sound_set_volume(s, SOUND_GAIN[sound])
+	if res := ma.sound_start(s); res != .SUCCESS {
+		ma.sound_uninit(s)
+		free(s)
+		return
+	}
+	append(&a.active, Active_Voice{sound = s, kind = sound})
 }
 
 // Spatial play. The sound is positioned at (x_px, y_px) in world-pixel space,
@@ -300,6 +512,7 @@ audio_play_at :: proc(a: ^Audio, sound: game.Sound, x_px, y_px: f32) {
 	ma.sound_set_max_distance(s, AUDIO_MAX_DISTANCE)
 	ma.sound_set_rolloff(s, AUDIO_ROLLOFF)
 	ma.sound_set_position(s, x, 0, z)
+	ma.sound_set_volume(s, SOUND_GAIN[sound])
 	if res := ma.sound_start(s); res != .SUCCESS {
 		ma.sound_uninit(s)
 		free(s)

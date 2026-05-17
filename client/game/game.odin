@@ -337,7 +337,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		}
 		if p->is_key_just_pressed(.E) {
 			if world_use_emp(&g.world) {
-				p->play_sound(.Button_Click)
+				p->play_sound(.Emp)
 			}
 		}
 		// F6: skip the surge cooldown and fire the next wave on this frame.
@@ -358,6 +358,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 			if tile, ok := g.world.tiles[g.selected_tile]; ok && tile_is_upgradeable(tile.kind) {
 				if tile.tier < tile_max_tier(tile.kind) && g.world.food >= tile_upgrade_cost(tile.kind, tile.tier) {
 					world_upgrade(&g.world, g.selected_tile)
+					p->play_sound(.Upgrade)
 				}
 			}
 		}
@@ -493,7 +494,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 			p->play_sound(.Button_Click)
 		}
 		if mouse_in_emp && p.mouse_left_pressed {
-			if world_use_emp(&g.world) do p->play_sound(.Button_Click)
+			if world_use_emp(&g.world) do p->play_sound(.Emp)
 		}
 	}
 
@@ -831,6 +832,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		if button_with_scrap_cost(&g.ui, p, label, repair_cost, btn_x, repair_y, btn_w, btn_h, !can_repair) {
 			if can_repair {
 				world_repair(&g.world, g.selected_tile)
+				p->play_sound(.Repair)
 			}
 		}
 
@@ -838,6 +840,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		if can_sell {
 			if button_with_food_cost(&g.ui, p, "Sell", refund, .Gain, btn_x, sell_y, btn_w, btn_h) {
 				world_sell(&g.world, g.selected_tile)
+				p->play_sound(.Sell)
 				g.has_selection = false
 			}
 		} else {
@@ -857,6 +860,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 			}
 			if clicked && can_up {
 				world_upgrade(&g.world, g.selected_tile)
+				p->play_sound(.Upgrade)
 			}
 		}
 	}
