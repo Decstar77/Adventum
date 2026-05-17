@@ -73,6 +73,18 @@ web_init :: proc "c" () {
 	g_started = true
 }
 
+// Called from JS when the browser tab loses focus or becomes hidden. We force
+// the pause menu open so the simulation freezes and the player explicitly
+// resumes when they tab back in. Also avoids the huge-dt simulation jump that
+// would otherwise hit on the next frame after requestAnimationFrame throttling.
+@(export)
+web_blur :: proc "c" () {
+	context = runtime.default_context()
+	if !g_started do return
+	if g_game.world.game_over || g_game.world.victory do return
+	g_game.paused = true
+}
+
 // Called from JS keydown/keyup. `down` is 1 for press, 0 for release.
 @(export)
 web_key :: proc "c" (key: i32, down: i32) {

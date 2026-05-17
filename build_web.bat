@@ -16,13 +16,10 @@ rem at build\web\ can serve them alongside the wasm.
 if not exist build\web\res mkdir build\web\res
 xcopy /e /y /i /q res build\web\res >nul
 
-rem Strip the assets the web build doesn't use: the .wav source SFX (web
-rem loads the .ogg siblings produced by compress_audio.bat) and the music
-rem mp3s (not yet wired into the web audio path — see host.js SOUND_FILES).
-rem Keeping these in res\ for the win32 build but out of the upload zip is
-rem the difference between a ~5 MB and a ~40 MB CrazyGames upload.
+rem Strip the .wav source SFX — the web build loads the .ogg siblings
+rem produced by compress_audio.bat instead. Music mp3s stay in the copy
+rem since host.js streams them via HTMLAudioElement.
 if exist build\web\res\sounds\*.wav del /q build\web\res\sounds\*.wav >nul
-if exist build\web\res\sounds\music-*.mp3 del /q build\web\res\sounds\music-*.mp3 >nul
 
 echo.
 echo Web build complete: build\web\

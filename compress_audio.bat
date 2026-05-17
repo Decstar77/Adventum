@@ -24,6 +24,21 @@ for %%F in (*.wav) do (
         exit /b 1
     )
 )
+
+rem Re-encode music tracks in place at 96 kbps stereo. The originals are
+rem committed to git, so if you ever want the higher-quality source back you
+rem can `git checkout res/sounds/music-*.mp3`. ffmpeg refuses to write to the
+rem input path so we go via a .tmp.mp3 sibling.
+for %%F in (music-*.mp3) do (
+    echo Re-encoding %%F
+    ffmpeg -y -loglevel error -i "%%F" -c:a libmp3lame -b:a 96k -ac 2 "%%~nF.tmp.mp3"
+    if errorlevel 1 (
+        echo failed on %%F
+        popd
+        exit /b 1
+    )
+    move /y "%%~nF.tmp.mp3" "%%F" >nul
+)
 popd
 
 echo.

@@ -356,6 +356,12 @@ function resumeAudio() {
 	if (audioCtx && audioCtx.state === 'suspended') {
 		audioCtx.resume().catch(() => {});
 	}
+	// Music playback also needs a user gesture before HTMLAudioElement.play()
+	// will succeed; retry any element that was rejected earlier.
+	if (music.needsStart) {
+		music.needsStart = false;
+		musicResume();
+	}
 }
 
 // Streams every sound file and decodes it into `audioBuffers`. `report(url,
@@ -482,6 +488,122 @@ function playSoundAt(soundIdx, xPx, yPx) {
 	}
 	src.connect(gain).connect(panner).connect(audioMasterGain);
 	src.start();
+}
+
+// --- Music ------------------------------------------------------------------
+//
+// Background music mirrors the win32 design: shuffled track order with a
+// bag-style no-repeat draw, crossfaded over MUSIC_CROSSFADE_S when the
+// current track is near its end. Tracks are streamed via HTMLAudioElement
+// (not decoded into AudioBuffers) so a 3-minute MP3 costs a small buffer
+// instead of ~30 MB of decoded PCM per track.
+//
+// Volume math: each element's `.volume` = masterVolume × MUSIC_VOLUME × fade,
+// where `fade` ramps 0→1 on start, 1→0 on outgoing. masterVolume comes from
+// the pause-menu slider; MUSIC_VOLUME keeps music quieter than SFX baseline.
+
+const MUSIC_FILES = [
+	'res/sounds/music-01.mp3',
+	'res/sounds/music-02.mp3',
+	'res/sounds/music-03.mp3',
+];
+const MUSIC_CROSSFADE_S = 3.0;
+const MUSIC_VOLUME      = 0.5;
+
+const music = {
+	enabled:  true,
+	current:  null,  // { audio, idx, fade }
+	incoming: null,
+	bag:      [],
+	lastIdx:  -1,
+	// `needsStart` flips true when play() is rejected by the browser's
+	// autoplay policy. The next user gesture (resumeAudio) retries.
+	needsStart: false,
+};
+
+function musicPickIdx() {
+	if (music.bag.length === 0) {
+		for (let i = 0; i < MUSIC_FILES.length; i++) music.bag.push(i);
+		// Fisher–Yates shuffle.
+		for (let i = music.bag.length - 1; i > 0; i--) {
+			const j = (Math.random() * (i + 1)) | 0;
+			const t = music.bag[i]; music.bag[i] = music.bag[j]; music.bag[j] = t;
+		}
+		// Don't let the first draw repeat the last-played track if we can avoid it.
+		if (music.bag[0] === music.lastIdx && music.bag.length > 1) {
+			const t = music.bag[0]; music.bag[0] = music.bag[1]; music.bag[1] = t;
+		}
+	}
+	const idx = music.bag.shift();
+	music.lastIdx = idx;
+	return idx;
+}
+
+function musicSpawn(idx) {
+	const a = new Audio(new URL(MUSIC_FILES[idx], import.meta.url).href);
+	a.preload = 'auto';
+	a.volume  = 0;
+	const voice = { audio: a, idx, fade: 0 };
+	a.play().catch(() => { music.needsStart = true; });
+	return voice;
+}
+
+function musicTick(dt) {
+	if (!music.enabled) return;
+
+	// Cold start (or restart after a failed play()): begin a track.
+	if (!music.current) {
+		music.current = musicSpawn(musicPickIdx());
+	}
+
+	const cur = music.current;
+	if (!cur) return;
+
+	const fadeStep = dt / MUSIC_CROSSFADE_S;
+
+	// Schedule the next track once we're inside the crossfade tail of the
+	// current one. duration can read NaN briefly while metadata is loading.
+	const dur = cur.audio.duration;
+	const t   = cur.audio.currentTime || 0;
+	if (!music.incoming && Number.isFinite(dur) && dur > 0 && t > 0 && (dur - t) <= MUSIC_CROSSFADE_S) {
+		music.incoming = musicSpawn(musicPickIdx());
+	}
+
+	if (music.incoming) {
+		// Crossfade: outgoing ramps down, incoming ramps up. When the outgoing
+		// hits zero we drop it and promote the incoming.
+		cur.fade           = Math.max(0, cur.fade - fadeStep);
+		music.incoming.fade = Math.min(1, music.incoming.fade + fadeStep);
+		if (cur.fade <= 0) {
+			try { cur.audio.pause(); cur.audio.src = ''; cur.audio.load(); } catch {}
+			music.current = music.incoming;
+			music.incoming = null;
+		}
+	} else {
+		// Plain fade-in on the active track.
+		cur.fade = Math.min(1, cur.fade + fadeStep);
+	}
+
+	// If the active track ended outside a crossfade (very short clip, or seek
+	// past end), kick the next one cleanly on the following tick.
+	if (music.current && music.current.audio.ended) {
+		music.current = null;
+	}
+
+	// Apply combined volume to every live element.
+	const mix = MUSIC_VOLUME * masterVolume;
+	if (music.current)  music.current.audio.volume  = Math.min(1, music.current.fade  * mix);
+	if (music.incoming) music.incoming.audio.volume = Math.min(1, music.incoming.fade * mix);
+}
+
+function musicPause() {
+	try { music.current?.audio.pause(); } catch {}
+	try { music.incoming?.audio.pause(); } catch {}
+}
+function musicResume() {
+	if (!music.enabled) return;
+	music.current?.audio.play().catch(() => { music.needsStart = true; });
+	music.incoming?.audio.play().catch(() => { music.needsStart = true; });
 }
 
 // Looped spatial voices, one per Sound family. Driven by `js_set_sound_loop`
@@ -784,6 +906,39 @@ function resizeCanvases() {
 resizeCanvases();
 window.addEventListener('resize', resizeCanvases);
 
+// --- Window blur / tab-hidden handling --------------------------------------
+// When the player tabs away or the browser hides the iframe, force the game
+// into the pause menu and suspend audio. Otherwise:
+//   - requestAnimationFrame throttles to ~1 Hz (or stops entirely), and the
+//     first frame back receives a huge `dt` that spikes the simulation.
+//   - Looping audio (flak cannon spray) keeps ringing in the background.
+// We deliberately don't auto-resume on focus — the player explicitly clicks
+// Resume when they're ready, which matches every other web game's UX.
+function handleHostBlur() {
+	if (exports && exports.web_blur) {
+		try { exports.web_blur(); } catch {}
+	}
+	if (audioCtx && audioCtx.state === 'running') {
+		audioCtx.suspend().catch(() => {});
+	}
+	musicPause();
+	// CrazyGames SDK: gameplayStop fires naturally next frame via
+	// js_set_gameplay_active (the game writes !paused into gameplay_active),
+	// so no extra call is needed here.
+}
+function handleHostFocus() {
+	// Audio context resumes here so background music / UI hover sounds work
+	// the instant the player clicks Resume; the game itself stays paused.
+	resumeAudio();
+	musicResume();
+}
+document.addEventListener('visibilitychange', () => {
+	if (document.hidden) handleHostBlur();
+	else                 handleHostFocus();
+});
+window.addEventListener('blur',  handleHostBlur);
+window.addEventListener('focus', handleHostFocus);
+
 let mouseX = 0, mouseY = 0, mouseLeft = 0, mouseRight = 0, scrollDy = 0;
 
 canvas.addEventListener('mousemove', (e) => {
@@ -888,7 +1043,11 @@ let exports;
 		const start = performance.now();
 		let last = start;
 		function frame(now) {
-			const dt    = (now - last) / 1000;
+			// Clamp dt so a long requestAnimationFrame gap (tab hidden, system
+			// sleep, debugger pause) can't slam the simulation with a huge
+			// step on the next frame. 100 ms is generous — anything beyond
+			// that is "the game was paused, treat this frame like any other".
+			const dt    = Math.min((now - last) / 1000, 0.1);
 			const time  = (now - start) / 1000;
 			last = now;
 			const dy = scrollDy; scrollDy = 0;
@@ -907,6 +1066,10 @@ let exports;
 			bgCam = { sx: 1, sy: 1, ox: 0, oy: 0 };
 
 			exports.web_frame(dt, time, canvas.width, canvas.height, mouseX, mouseY, dy, mouseLeft, mouseRight);
+
+			// Tick music last so it picks up the freshest masterVolume the
+			// game just pushed via js_set_master_volume.
+			musicTick(dt);
 
 			// Render bg after web_frame so we use the fog lights and camera
 			// the game just pushed. Layering is by canvas stacking, not by
