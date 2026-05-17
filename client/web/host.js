@@ -590,10 +590,14 @@ function musicTick(dt) {
 		music.current = null;
 	}
 
-	// Apply combined volume to every live element.
-	const mix = MUSIC_VOLUME * masterVolume;
-	if (music.current)  music.current.audio.volume  = Math.min(1, music.current.fade  * mix);
-	if (music.incoming) music.incoming.audio.volume = Math.min(1, music.incoming.fade * mix);
+	// Apply combined volume to every live element. HTMLMediaElement.volume
+	// is a strict [0, 1] range — any value outside that throws synchronously
+	// (IndexSizeError), which would kill the RAF loop entirely. Clamp on
+	// both ends to be safe against floating-point drift in `fade`.
+	const mix  = MUSIC_VOLUME * masterVolume;
+	const clip = (v) => Math.max(0, Math.min(1, v));
+	if (music.current)  music.current.audio.volume  = clip(music.current.fade  * mix);
+	if (music.incoming) music.incoming.audio.volume = clip(music.incoming.fade * mix);
 }
 
 function musicPause() {
@@ -1047,7 +1051,11 @@ let exports;
 			// sleep, debugger pause) can't slam the simulation with a huge
 			// step on the next frame. 100 ms is generous — anything beyond
 			// that is "the game was paused, treat this frame like any other".
-			const dt    = Math.min((now - last) / 1000, 0.1);
+			// The Math.max(0, …) guard handles a Chrome quirk where the rAF
+			// timestamp and the `last`-time snapshot from `performance.now()`
+			// can come from different clock samples, occasionally producing a
+			// tiny negative delta on the first frame.
+			const dt    = Math.max(0, Math.min((now - last) / 1000, 0.1));
 			const time  = (now - start) / 1000;
 			last = now;
 			const dy = scrollDy; scrollDy = 0;
