@@ -29,6 +29,7 @@ Game :: struct {
 	// Pause menu. Volume is a stub — no audio is wired up yet, but the slider
 	// drives this value so it's ready for FMOD when it lands.
 	paused:           bool,
+	show_controls:    bool,
 	volume:           f32,
 	volume_dragging:  bool,
 
@@ -200,6 +201,7 @@ game_restart :: proc(g: ^Game) {
 	g.has_selection = false
 	g.tick_accum = 0
 	g.paused = false
+	g.show_controls = false
 }
 
 // Stylised gear icon for the pause-menu button — four cardinal teeth, a body
@@ -252,6 +254,8 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	// (preserves the long-standing muscle memory) — second press pauses.
 	if p->is_key_just_pressed(.Escape) {
 		switch {
+		case g.paused && g.show_controls:
+			g.show_controls = false
 		case g.paused:
 			g.paused = false
 		case g.mode == .Place || g.mode == .Target_Bomb || g.has_selection:
@@ -996,7 +1000,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		p->draw_rect(0, 0, sw, sh, {0, 0, 0, 0.55})
 
 		PMW := f32(360)
-		PMH := f32(300)
+		PMH := f32(360)
 		px := (sw - PMW) * 0.5
 		py := (sh - PMH) * 0.5
 
@@ -1004,50 +1008,109 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		p->draw_line(px,       py,       px + PMW, py,       1, {1, 1, 1, 0.15})
 		p->draw_line(px,       py + PMH, px + PMW, py + PMH, 1, {0, 0, 0, 0.40})
 
-		title := "Paused"
-		tw := p->text_measure(title, .Large)
-		p->draw_text(px + (PMW - tw) * 0.5, py + 16 + font_large, title, {0.95, 0.95, 0.98, 1}, .Large)
+		if !g.show_controls {
+			title := "Paused"
+			tw := p->text_measure(title, .Large)
+			p->draw_text(px + (PMW - tw) * 0.5, py + 16 + font_large, title, {0.95, 0.95, 0.98, 1}, .Large)
 
-		// Volume slider — stub; no audio hooked up yet.
-		vol_label := fmt.tprintf("Volume   %d%%", i32(g.volume * 100 + 0.5))
-		p->draw_text(px + 24, py + 16 + font_large + 36 + font_small, vol_label, {0.85, 0.90, 0.98, 1}, .Small)
+			// Volume slider — stub; no audio hooked up yet.
+			vol_label := fmt.tprintf("Volume   %d%%", i32(g.volume * 100 + 0.5))
+			p->draw_text(px + 24, py + 16 + font_large + 36 + font_small, vol_label, {0.85, 0.90, 0.98, 1}, .Small)
 
-		track_x := px + 24
-		track_w := PMW - 48
-		track_h := f32(8)
-		track_y := py + 16 + font_large + 36 + font_small + 14
-		p->draw_rect(track_x, track_y, track_w,                 track_h, {0.05, 0.06, 0.08, 1})
-		p->draw_rect(track_x, track_y, track_w * g.volume,      track_h, {0.45, 0.85, 0.55, 1})
-		knob_cx := track_x + track_w * g.volume
-		knob_cy := track_y + track_h * 0.5
-		p->draw_circle(knob_cx, knob_cy, 9, {0.95, 0.95, 0.98, 1})
+			track_x := px + 24
+			track_w := PMW - 48
+			track_h := f32(8)
+			track_y := py + 16 + font_large + 36 + font_small + 14
+			p->draw_rect(track_x, track_y, track_w,                 track_h, {0.05, 0.06, 0.08, 1})
+			p->draw_rect(track_x, track_y, track_w * g.volume,      track_h, {0.45, 0.85, 0.55, 1})
+			knob_cx := track_x + track_w * g.volume
+			knob_cy := track_y + track_h * 0.5
+			p->draw_circle(knob_cx, knob_cy, 9, {0.95, 0.95, 0.98, 1})
 
-		// Hit area is the track expanded vertically so the knob is easy to grab.
-		hit_x := track_x
-		hit_y := track_y - 12
-		hit_w := track_w
-		hit_h := track_h + 24
-		if p.mouse_left_pressed && point_in_rect(p.mouse, hit_x, hit_y, hit_w, hit_h) {
-			g.volume_dragging = true
+			// Hit area is the track expanded vertically so the knob is easy to grab.
+			hit_x := track_x
+			hit_y := track_y - 12
+			hit_w := track_w
+			hit_h := track_h + 24
+			if p.mouse_left_pressed && point_in_rect(p.mouse, hit_x, hit_y, hit_w, hit_h) {
+				g.volume_dragging = true
+			}
+			if g.volume_dragging {
+				t := (p.mouse.x - track_x) / track_w
+				if t < 0 do t = 0
+				if t > 1 do t = 1
+				g.volume = t
+			}
 		}
+
 		if !p.mouse_left_down do g.volume_dragging = false
-		if g.volume_dragging {
-			t := (p.mouse.x - track_x) / track_w
-			if t < 0 do t = 0
-			if t > 1 do t = 1
-			g.volume = t
-		}
 
 		btn_w := PMW - 48
 		btn_h := f32(40)
 		bx    := px + 24
-		restart_y := py + PMH - 16 - btn_h*2 - 10
-		resume_y  := py + PMH - 16 - btn_h
-		if ui_button(&g.ui, p, "Restart", bx, restart_y, btn_w, btn_h) {
-			game_restart(g)
+		restart_y  := py + PMH - 16 - btn_h*3 - 20
+		controls_y := py + PMH - 16 - btn_h*2 - 10
+		resume_y   := py + PMH - 16 - btn_h
+		if !g.show_controls {
+			if ui_button(&g.ui, p, "Restart",  bx, restart_y,  btn_w, btn_h) {
+				game_restart(g)
+			}
+			if ui_button(&g.ui, p, "Controls", bx, controls_y, btn_w, btn_h) {
+				g.show_controls = true
+			}
+			if ui_button(&g.ui, p, "Resume",   bx, resume_y,   btn_w, btn_h) {
+				g.paused = false
+			}
 		}
-		if ui_button(&g.ui, p, "Resume",  bx, resume_y,  btn_w, btn_h) {
-			g.paused = false
+
+		// Controls modal — drawn on top of the pause panel; its own buttons
+		// are gated above so clicks don't fall through.
+		if g.show_controls {
+			CMW := f32(440)
+			CMH := f32(440)
+			cx := (sw - CMW) * 0.5
+			cy := (sh - CMH) * 0.5
+
+			p->draw_rect(0, 0, sw, sh, {0, 0, 0, 0.35})
+			p->draw_rect(cx, cy, CMW, CMH, {0.10, 0.11, 0.14, 0.98})
+			p->draw_line(cx,       cy,       cx + CMW, cy,       1, {1, 1, 1, 0.15})
+			p->draw_line(cx,       cy + CMH, cx + CMW, cy + CMH, 1, {0, 0, 0, 0.40})
+
+			ctitle := "Controls"
+			ctw := p->text_measure(ctitle, .Large)
+			p->draw_text(cx + (CMW - ctw) * 0.5, cy + 16 + font_large, ctitle, {0.95, 0.95, 0.98, 1}, .Large)
+
+			rows := [?][2]string{
+				{"W A S D",        "Pan camera"},
+				{"Mouse Wheel",    "Zoom"},
+				{"Right Mouse",    "Pan / cancel placement"},
+				{"Left Mouse",     "Place tile / select"},
+				{"1 - 7",          "Select tile to build"},
+				{"Space",          "Upgrade selected tile"},
+				{"Q",              "Bomb (target then click)"},
+				{"E",              "EMP"},
+				{"R",              "Restart (on game over)"},
+				{"Shift + Enter",  "Toggle fullscreen"},
+				{"Escape",         "Cancel / pause"},
+			}
+
+			row_h := font_small + 10
+			list_y := cy + 16 + font_large + 24
+			key_x  := cx + 24
+			desc_x := cx + 180
+			for row, i in rows {
+				ry := list_y + f32(i) * row_h
+				p->draw_text(key_x,  ry, row[0], {0.85, 0.90, 0.98, 1}, .Small)
+				p->draw_text(desc_x, ry, row[1], {0.95, 0.95, 0.98, 1}, .Small)
+			}
+
+			cb_w := CMW - 48
+			cb_h := f32(40)
+			cb_x := cx + 24
+			cb_y := cy + CMH - 16 - cb_h
+			if ui_button(&g.ui, p, "Back", cb_x, cb_y, cb_w, cb_h) {
+				g.show_controls = false
+			}
 		}
 	}
 }
