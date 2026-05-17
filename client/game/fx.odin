@@ -239,6 +239,18 @@ fx_emit_enemy_death :: proc(w: ^World, pos: [2]f32, kind: Enemy_Kind) {
 		core_color  = {1.00, 0.96, 0.65, 1}
 		chunk_color = {0.98, 0.78, 0.18, 1}
 		count = 14
+	case .Brute_Boss:
+		core_color  = {1.0, 0.78, 0.62, 1}
+		chunk_color = {0.729, 0.459, 0.090, 1}
+		count = 48
+	case .Spitter_Boss:
+		core_color  = {0.78, 1.0, 0.92, 1}
+		chunk_color = {0.114, 0.620, 0.459, 1}
+		count = 40
+	case .Flyer_Boss:
+		core_color  = {1.00, 0.96, 0.65, 1}
+		chunk_color = {0.98, 0.78, 0.18, 1}
+		count = 40
 	}
 	// Central flash.
 	emit(w, Particle{
@@ -246,14 +258,14 @@ fx_emit_enemy_death :: proc(w: ^World, pos: [2]f32, kind: Enemy_Kind) {
 		vel      = {0, 0},
 		life     = 0.18,
 		max_life = 0.18,
-		r0       = kind == .Brute ? 16 : 12,
+		r0       = (kind == .Brute || kind == .Brute_Boss || kind == .Spitter_Boss || kind == .Flyer_Boss) ? 22 : 12,
 		r1       = 2,
 		color    = core_color,
 		drag     = 0,
 	})
 	for _ in 0 ..< count {
 		a := rand.float32_range(0, 2 * math.PI)
-		s := rand.float32_range(60, kind == .Brute ? 260 : 200)
+		s := rand.float32_range(60, (kind == .Brute || kind == .Brute_Boss || kind == .Spitter_Boss || kind == .Flyer_Boss) ? 320 : 200)
 		life := rand.float32_range(0.30, 0.55)
 		emit(w, Particle{
 			pos      = pos,

@@ -12,6 +12,13 @@ Enemy_Kind :: enum {
 	Spitter,
 	Swarmer,
 	Flyer,
+	// Themed bosses that headline waves 10-12 (and all three return for the
+	// wave-13 finale). Each reuses the behaviour of its base kind — the only
+	// differences are stats, hitbox-scale visuals, and per-kind pacing knobs
+	// (fire interval for Spitter_Boss, turn rate for Flyer_Boss).
+	Brute_Boss,
+	Spitter_Boss,
+	Flyer_Boss,
 }
 
 // Flyer tuning. Flyers never stop moving — they fly in `heading` direction at
@@ -72,33 +79,67 @@ BRUTE_WEIGHTS   :: Pathing_Weights{empty = 3, wall =  2, other =  4}
 
 enemy_stats :: proc(kind: Enemy_Kind) -> (hp, speed, dmg: f32) {
 	switch kind {
-	case .Crawler: return 20, 80, 10
-	case .Brute:   return 100, 35, 30
-	case .Spitter: return 30, 55, 14
-	case .Swarmer: return 35, 65, 8
-	case .Flyer:   return 30, 130, 10
+	case .Crawler:      return 20, 80, 10
+	case .Brute:        return 100, 35, 30
+	case .Spitter:      return 30, 55, 14
+	case .Swarmer:      return 35, 65, 8
+	case .Flyer:        return 30, 130, 10
+	case .Brute_Boss:   return 1000, 28, 60
+	case .Spitter_Boss: return 240,  50, 21
+	case .Flyer_Boss:   return 240,  110, 15
 	}
 	return 0, 0, 0
+}
+
+// Per-kind Spitter-style fire interval. Only ranged kinds care; melee returns
+// 0 (unused). Spitter_Boss fires roughly twice as fast as a Spitter.
+enemy_fire_interval :: proc(kind: Enemy_Kind) -> f32 {
+	#partial switch kind {
+	case .Spitter:      return SPITTER_FIRE_INTERVAL
+	case .Spitter_Boss: return 0.7
+	}
+	return 0
+}
+
+// Airborne kinds — ground turrets ignore these, Flak guns home on them, and
+// player projectile filtering keys off this. Adding a new flying enemy means
+// adding it to this single helper.
+enemy_is_flying :: proc(kind: Enemy_Kind) -> bool {
+	return kind == .Flyer || kind == .Flyer_Boss
+}
+
+// Per-kind Flyer turn rate. Flyer_Boss banks slower so its arcs are dramatic
+// (and so the player can actually intercept it with a Flak).
+enemy_turn_rate :: proc(kind: Enemy_Kind) -> f32 {
+	#partial switch kind {
+	case .Flyer:      return FLYER_TURN_RATE
+	case .Flyer_Boss: return 1.1
+	}
+	return FLYER_TURN_RATE
 }
 
 // Distance the enemy stops short of a tile's hex boundary before attacking.
 // Contact-melee kinds return 0; ranged kinds stand off and chip from there.
 enemy_attack_range :: proc(kind: Enemy_Kind) -> f32 {
 	switch kind {
-	case .Crawler, .Brute, .Swarmer: return 0
-	case .Spitter:                   return 70
-	case .Flyer:                     return 0
+	case .Crawler, .Brute, .Swarmer, .Brute_Boss: return 0
+	case .Spitter:                                 return 70
+	case .Spitter_Boss:                            return 110
+	case .Flyer, .Flyer_Boss:                      return 0
 	}
 	return 0
 }
 
 enemy_kind_name :: proc(kind: Enemy_Kind) -> string {
 	switch kind {
-	case .Crawler: return "Crawler"
-	case .Brute:   return "Brute"
-	case .Spitter: return "Spitter"
-	case .Swarmer: return "Swarmer"
-	case .Flyer:   return "Flyer"
+	case .Crawler:      return "Crawler"
+	case .Brute:        return "Brute"
+	case .Spitter:      return "Spitter"
+	case .Swarmer:      return "Swarmer"
+	case .Flyer:        return "Flyer"
+	case .Brute_Boss:   return "Brute Boss"
+	case .Spitter_Boss: return "Spitter Boss"
+	case .Flyer_Boss:   return "Flyer Boss"
 	}
 	return "?"
 }
@@ -176,8 +217,8 @@ build_path_field :: proc(w: ^World, field: ^Path_Field, weights: Pathing_Weights
 
 enemy_field_for :: proc(w: ^World, kind: Enemy_Kind) -> ^Path_Field {
 	switch kind {
-	case .Crawler, .Spitter, .Swarmer, .Flyer: return &w.field_crawler
-	case .Brute:                               return &w.field_brute
+	case .Crawler, .Spitter, .Swarmer, .Flyer, .Spitter_Boss, .Flyer_Boss: return &w.field_crawler
+	case .Brute, .Brute_Boss:                                              return &w.field_brute
 	}
 	return &w.field_crawler
 }
@@ -193,7 +234,7 @@ enemy_spawn :: proc(w: ^World, kind: Enemy_Kind) {
 	// Flyers spawn already pointing roughly toward the core so their first
 	// arc isn't an awkward 180° flip; the turn-rate limit will refine from
 	// there once they pick a real target.
-	if kind == .Flyer {
+	if kind == .Flyer || kind == .Flyer_Boss {
 		e.heading = math.atan2(-pos.y, -pos.x)
 	}
 	append(&w.enemies, e)
@@ -286,7 +327,7 @@ enemies_update :: proc(w: ^World, dt: f32) {
 		// a capped turn rate so the path arcs visibly. When they pass close to
 		// a target tile centre they chip it, then sweep past and come around
 		// for another pass.
-		if e.kind == .Flyer {
+		if e.kind == .Flyer || e.kind == .Flyer_Boss {
 			target, has_target := flyer_pick_target(w, e.pos)
 			desired := e.heading
 			if has_target {
@@ -298,7 +339,7 @@ enemies_update :: proc(w: ^World, dt: f32) {
 			diff := desired - e.heading
 			for diff >  math.PI do diff -= 2 * math.PI
 			for diff < -math.PI do diff += 2 * math.PI
-			max_step := FLYER_TURN_RATE * dt
+			max_step := enemy_turn_rate(e.kind) * dt
 			if diff >  max_step do diff =  max_step
 			if diff < -max_step do diff = -max_step
 			e.heading += diff
@@ -365,7 +406,7 @@ enemies_update :: proc(w: ^World, dt: f32) {
 			if present {
 				// Spitter sits at standoff range and lobs projectiles on a
 				// timer; melee kinds chip continuously like before.
-				if e.kind == .Spitter {
+				if e.kind == .Spitter || e.kind == .Spitter_Boss {
 					if e.attack_cd <= 0 {
 						dir := [2]f32{dx / max(d, 0.001), dy / max(d, 0.001)}
 						muzzle := [2]f32{e.pos.x + dir.x * 10, e.pos.y + dir.y * 10}
@@ -377,7 +418,7 @@ enemies_update :: proc(w: ^World, dt: f32) {
 							target = target,
 						})
 						world_queue_sound_at(w, .Enemy_Attack, e.pos)
-						e.attack_cd = SPITTER_FIRE_INTERVAL
+						e.attack_cd = enemy_fire_interval(e.kind)
 					}
 				} else {
 					tile.hp -= dmg * dt
@@ -548,6 +589,55 @@ enemies_render :: proc(w: ^World, p: ^Platform) {
 			p->draw_circle(e.pos.x,     e.pos.y + 4, 5, lobe)
 			p->draw_circle(e.pos.x,     e.pos.y,     4, core)
 			draw_health_bar(p, e.pos.x, e.pos.y - 16, 22, e.hp, max_hp)
+		case .Brute_Boss:
+			// Oversized Brute silhouette with a crimson rim to read as a boss
+			// at a glance even at low zoom.
+			p->draw_rect(e.pos.x - 22, e.pos.y - 22, 44, 44, {0.18, 0.05, 0.05, 1})
+			p->draw_rect(e.pos.x - 19, e.pos.y - 19, 38, 38, {0.980, 0.933, 0.855, 1})
+			p->draw_rect(e.pos.x - 11, e.pos.y - 11, 22, 22, {0.729, 0.459, 0.090, 1})
+			p->draw_rect(e.pos.x - 4,  e.pos.y - 4,  8,  8,  {0.18, 0.05, 0.05, 1})
+			draw_health_bar(p, e.pos.x, e.pos.y - 30, 48, e.hp, max_hp)
+		case .Spitter_Boss:
+			// Oversized Spitter with the same teal palette but darker rim.
+			p->draw_circle(e.pos.x, e.pos.y, 22, {0.05, 0.20, 0.16, 1})
+			p->draw_circle(e.pos.x, e.pos.y, 19, {0.882, 0.961, 0.933, 1})
+			p->draw_circle(e.pos.x, e.pos.y, 12, {0.114, 0.620, 0.459, 1})
+			p->draw_circle(e.pos.x, e.pos.y, 5,  {0.04, 0.18, 0.14, 1})
+			draw_health_bar(p, e.pos.x, e.pos.y - 30, 44, e.hp, max_hp)
+		case .Flyer_Boss:
+			// Same triangle anatomy as Flyer but ~2x scale and a deeper amber
+			// palette with a darker rim.
+			body   := [4]f32{0.96, 0.74, 0.10, 1}
+			rim    := [4]f32{0.30, 0.18, 0.02, 1}
+			inset  := [4]f32{0.68, 0.48, 0.05, 1}
+			tip_r   := f32(28)
+			rear_r  := f32(22)
+			rear_a  := f32(2.5)
+			tip := [2]f32{e.pos.x + math.cos(e.heading) * tip_r, e.pos.y + math.sin(e.heading) * tip_r}
+			lr  := [2]f32{
+				e.pos.x + math.cos(e.heading + rear_a) * rear_r,
+				e.pos.y + math.sin(e.heading + rear_a) * rear_r,
+			}
+			rr  := [2]f32{
+				e.pos.x + math.cos(e.heading - rear_a) * rear_r,
+				e.pos.y + math.sin(e.heading - rear_a) * rear_r,
+			}
+			p->draw_line(tip.x, tip.y, lr.x, lr.y, 10, body)
+			p->draw_line(tip.x, tip.y, rr.x, rr.y, 10, body)
+			p->draw_line(lr.x,  lr.y,  rr.x, rr.y, 10, body)
+			cx := (tip.x + lr.x + rr.x) / 3
+			cy := (tip.y + lr.y + rr.y) / 3
+			inset_lerp :: proc(a: [2]f32, c: f32, cx, cy: f32) -> [2]f32 {
+				return {a.x + (cx - a.x) * c, a.y + (cy - a.y) * c}
+			}
+			tip2 := inset_lerp(tip, 0.30, cx, cy)
+			lr2  := inset_lerp(lr,  0.30, cx, cy)
+			rr2  := inset_lerp(rr,  0.30, cx, cy)
+			p->draw_line(tip2.x, tip2.y, lr2.x, lr2.y, 5, inset)
+			p->draw_line(tip2.x, tip2.y, rr2.x, rr2.y, 5, inset)
+			p->draw_line(lr2.x,  lr2.y,  rr2.x, rr2.y, 5, inset)
+			p->draw_circle(cx, cy, 5, rim)
+			draw_health_bar(p, e.pos.x, e.pos.y - 34, 48, e.hp, max_hp)
 		}
 	}
 }

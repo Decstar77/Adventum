@@ -156,6 +156,14 @@ World :: struct {
 	path_dirty:    bool,
 	survive_time:  f32,
 	game_over:     bool,
+	// Set when the player clears the final wave (see FINAL_WAVE_INDEX). Drives
+	// the victory overlay parallel to `game_over`; if both somehow flipped
+	// (shouldn't — surges stop running once the Core is dead), `game_over`
+	// wins by being checked first in the renderer.
+	victory:       bool,
+	// Debug toggle (F6). When set, the Core tile's HP is pinned to max each
+	// frame, so the player can sprint through surges without losing the run.
+	core_invincible: bool,
 	waves:         Wave_State,
 
 	// Sound effects queued by simulation code (turrets firing, enemies dying,

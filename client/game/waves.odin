@@ -72,12 +72,33 @@ trickle_interval :: proc(t: f32) -> f32 {
 	return iv
 }
 
+FINAL_WAVE_INDEX :: i32(12)  // 0-based: wave 13 is the finale.
+
 @(private="file")
-surge_composition :: proc(index: i32) -> (crawlers, brutes, spitters, swarmers, flyers: i32) {
+surge_composition :: proc(index: i32) -> (crawlers, brutes, spitters, swarmers, flyers, brute_bosses, spitter_bosses, flyer_bosses: i32) {
 	// `index` is 0-based (first surge => 0). Every wave includes at least one
 	// of each kind so the player actually sees the variety the game has — the
 	// previous gating ("brutes from wave 2, spitters from wave 2") meant
 	// players who died on wave 1 never saw them at all.
+
+	// Waves 10-13 (0-based 9..12) are themed finale waves with fixed
+	// compositions. They short-circuit the open-ended scaling formula below.
+	switch index {
+	case 9:
+		// Wave 10 — Melee theme: tanky Brute boss surrounded by Brutes and a
+		// crawler swarm. No ranged/air pressure.
+		return 30, 12, 0, 0, 0, 1, 0, 0
+	case 10:
+		// Wave 11 — Ranged theme: Spitter boss + heavy Spitter line + Swarmers.
+		// A handful of Crawlers so the player can't fully wall off and forget.
+		return 6, 0, 20, 18, 0, 0, 1, 0
+	case 11:
+		// Wave 12 — Air theme: Flyer boss + flock of Flyers. Pure air raid.
+		return 0, 0, 0, 0, 18, 0, 0, 1
+	case 12:
+		// Wave 13 — Finale: all three bosses + a balanced mix of every kind.
+		return 20, 8, 10, 6, 8, 1, 1, 1
+	}
 
 	crawlers = 8 + index * 2
 	if ( index >= 3 ) {
@@ -98,7 +119,7 @@ surge_composition :: proc(index: i32) -> (crawlers, brutes, spitters, swarmers, 
 			spitters =  3 + i32( math.pow( f64(index), 2 ) )
 		}
 	}
-	
+
 	// Swarmers start at surge 1 (each splits into 2 crawlers, so we ramp slow
 	// to avoid runaway populations from chained splits).
 	if index >= 1 do swarmers = 1 + (index - 1) / 2
@@ -116,13 +137,17 @@ surge_composition :: proc(index: i32) -> (crawlers, brutes, spitters, swarmers, 
 // instead of running away on a fixed-cadence schedule.
 @(private="file")
 surge_total_hp :: proc(index: i32) -> f32 {
-	crawlers, brutes, spitters, swarmers, flyers := surge_composition(index)
-	chp, _, _ := enemy_stats(.Crawler)
-	bhp, _, _ := enemy_stats(.Brute)
-	shp, _, _ := enemy_stats(.Spitter)
-	whp, _, _ := enemy_stats(.Swarmer)
-	fhp, _, _ := enemy_stats(.Flyer)
-	return f32(crawlers) * chp + f32(brutes) * bhp + f32(spitters) * shp + f32(swarmers) * whp + f32(flyers) * fhp
+	crawlers, brutes, spitters, swarmers, flyers, brute_bosses, spitter_bosses, flyer_bosses := surge_composition(index)
+	chp,  _, _ := enemy_stats(.Crawler)
+	bhp,  _, _ := enemy_stats(.Brute)
+	shp,  _, _ := enemy_stats(.Spitter)
+	whp,  _, _ := enemy_stats(.Swarmer)
+	fhp,  _, _ := enemy_stats(.Flyer)
+	bbp,  _, _ := enemy_stats(.Brute_Boss)
+	sbp,  _, _ := enemy_stats(.Spitter_Boss)
+	fbp,  _, _ := enemy_stats(.Flyer_Boss)
+	return f32(crawlers) * chp + f32(brutes) * bhp + f32(spitters) * shp + f32(swarmers) * whp + f32(flyers) * fhp +
+	       f32(brute_bosses) * bbp + f32(spitter_bosses) * sbp + f32(flyer_bosses) * fbp
 }
 
 // Pick the kind to spawn for a single trickle tick. Past the early game the
@@ -172,28 +197,39 @@ waves_update :: proc(world: ^World, w: ^Wave_State, dt: f32) {
 		return
 	}
 
-	// Continuous trickle (always running once grace ends, ramps with elapsed time).
-	w.trickle_acc += dt
-	iv := trickle_interval(w.elapsed)
-	for w.trickle_acc >= iv {
-		w.trickle_acc -= iv
-		enemy_spawn(world, trickle_kind(w.surge_index))
+	// Continuous trickle (always running once grace ends, ramps with elapsed
+	// time). Stops after the final wave so the field can actually clear for the
+	// victory check.
+	if w.surge_index <= FINAL_WAVE_INDEX {
+		w.trickle_acc += dt
+		iv := trickle_interval(w.elapsed)
+		for w.trickle_acc >= iv {
+			w.trickle_acc -= iv
+			enemy_spawn(world, trickle_kind(w.surge_index))
+		}
 	}
+
+	// Once the finale wave has fired (and presumably ended), stop scheduling
+	// new surges. The trickle still ticks above so latecomers keep arriving,
+	// but no new surge banner can fire after wave 13.
+	if !w.surge_active && w.surge_index > FINAL_WAVE_INDEX do return
 
 	// Trigger a new surge.
 	if !w.surge_active && w.elapsed >= w.next_surge_at {
-		crawlers, brutes, spitters, swarmers, flyers := surge_composition(w.surge_index)
+		crawlers, brutes, spitters, swarmers, flyers, brute_bosses, spitter_bosses, flyer_bosses := surge_composition(w.surge_index)
 		clear(&w.surge.queue)
 		// pop() removes the LAST element, so order the queue so crawlers spawn
-		// first (drama: small things first, brutes follow). Flyers sit near
-		// the front of the spawn order (back of the queue) so they show up
-		// last — by the time they appear the player is already engaged with
-		// the ground push.
-		for _ in 0 ..< flyers   do append(&w.surge.queue, Enemy_Kind.Flyer)
-		for _ in 0 ..< brutes   do append(&w.surge.queue, Enemy_Kind.Brute)
-		for _ in 0 ..< swarmers do append(&w.surge.queue, Enemy_Kind.Swarmer)
-		for _ in 0 ..< spitters do append(&w.surge.queue, Enemy_Kind.Spitter)
-		for _ in 0 ..< crawlers do append(&w.surge.queue, Enemy_Kind.Crawler)
+		// first (drama: small things first, brutes follow). Bosses sit at the
+		// front of the append order (= back of pop order) so they show up
+		// last, as the surge crescendos.
+		for _ in 0 ..< brute_bosses   do append(&w.surge.queue, Enemy_Kind.Brute_Boss)
+		for _ in 0 ..< spitter_bosses do append(&w.surge.queue, Enemy_Kind.Spitter_Boss)
+		for _ in 0 ..< flyer_bosses   do append(&w.surge.queue, Enemy_Kind.Flyer_Boss)
+		for _ in 0 ..< flyers         do append(&w.surge.queue, Enemy_Kind.Flyer)
+		for _ in 0 ..< brutes         do append(&w.surge.queue, Enemy_Kind.Brute)
+		for _ in 0 ..< swarmers       do append(&w.surge.queue, Enemy_Kind.Swarmer)
+		for _ in 0 ..< spitters       do append(&w.surge.queue, Enemy_Kind.Spitter)
+		for _ in 0 ..< crawlers       do append(&w.surge.queue, Enemy_Kind.Crawler)
 		w.surge.duration  = WAVE_SURGE_DURATION
 		w.surge.time_left = WAVE_SURGE_DURATION
 		w.surge.spawn_acc = 0

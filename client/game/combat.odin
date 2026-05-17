@@ -75,11 +75,14 @@ Projectile :: struct {
 
 scrap_for_kind :: proc(kind: Enemy_Kind) -> i32 {
 	switch kind {
-	case .Crawler: return 1
-	case .Brute:   return 4
-	case .Spitter: return 2
-	case .Swarmer: return 3
-	case .Flyer:   return 3
+	case .Crawler:      return 1
+	case .Brute:        return 4
+	case .Spitter:      return 2
+	case .Swarmer:      return 3
+	case .Flyer:        return 3
+	case .Brute_Boss:   return 40
+	case .Spitter_Boss: return 30
+	case .Flyer_Boss:   return 30
 	}
 	return 0
 }
@@ -91,7 +94,7 @@ nearest_enemy_in_range :: proc(w: ^World, from: [2]f32, range: f32, skip_flyers:
 	for e, i in w.enemies {
 		// Turrets can't engage flyers (they're ground-only guns); the Flak is
 		// the dedicated AA. `skip_flyers` lets each caller opt in.
-		if skip_flyers && e.kind == .Flyer do continue
+		if skip_flyers && enemy_is_flying(e.kind) do continue
 		dx := e.pos.x - from.x
 		dy := e.pos.y - from.y
 		d2 := dx * dx + dy * dy
@@ -177,9 +180,9 @@ projectiles_update :: proc(w: ^World, dt: f32) {
 		for j in 0 ..< len(w.enemies) {
 			e := &w.enemies[j]
 			// Anti-air projectiles pass straight through ground enemies.
-			if p.air_only && e.kind != .Flyer do continue
+			if p.air_only && !enemy_is_flying(e.kind) do continue
 			// Ground-only projectiles ignore airborne enemies.
-			if p.ground_only && e.kind == .Flyer do continue
+			if p.ground_only && enemy_is_flying(e.kind) do continue
 			dx := e.pos.x - p.pos.x
 			dy := e.pos.y - p.pos.y
 			if dx * dx + dy * dy <= hit_r2 {
@@ -321,7 +324,7 @@ nearest_flyer_in_range :: proc(w: ^World, from: [2]f32, range: f32) -> int {
 	best := -1
 	best_d2 := range * range
 	for e, i in w.enemies {
-		if e.kind != .Flyer do continue
+		if !enemy_is_flying(e.kind) do continue
 		dx := e.pos.x - from.x
 		dy := e.pos.y - from.y
 		d2 := dx * dx + dy * dy

@@ -321,7 +321,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		if _, ok := g.world.tiles[g.selected_tile]; !ok do g.has_selection = false
 	}
 
-	if !paused && !g.world.game_over {
+	if !paused && !g.world.game_over && !g.world.victory {
 		if p->is_key_just_pressed(.C) do enemy_spawn(&g.world, .Crawler)
 		if p->is_key_just_pressed(.B) do enemy_spawn(&g.world, .Brute)
 		if p->is_key_just_pressed(.V) do enemy_spawn(&g.world, .Spitter)
@@ -341,7 +341,16 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 			}
 		}
 		// F6: skip the surge cooldown and fire the next wave on this frame.
-		if p->is_key_just_pressed(.F6) do waves_force_next_surge(&g.world.waves)
+		// Also latches Core invincibility on so the debug fast-forward can't
+		// kill the run mid-test. Press again to re-fire surges; invincibility
+		// stays on until the next `game_restart`.
+		if p->is_key_just_pressed(.F6) {
+			waves_force_next_surge(&g.world.waves)
+			g.world.core_invincible = true
+			g.world.food  = 10000
+			g.world.scrap = 10000
+			g.world.bomb_cooldown = 0 
+		}
 
 		// Space upgrades the selected tile — same affordability/cap rules as
 		// the panel's Upgrade button, just bound to a hotkey for convenience.
@@ -354,11 +363,11 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		}
 	}
 
-	if !paused && g.world.game_over && p->is_key_just_pressed(.R) {
+	if !paused && (g.world.game_over || g.world.victory) && p->is_key_just_pressed(.R) {
 		game_restart(g)
 	}
 
-	if !paused && !g.world.game_over {
+	if !paused && !g.world.game_over && !g.world.victory {
 		g.world.survive_time += dt
 
 		g.tick_accum += dt
@@ -378,7 +387,23 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		particles_update(&g.world, dt)
 
 		if c, ok := g.world.tiles[g.world.core]; ok {
-			if c.hp <= 0 do g.world.game_over = true
+			if g.world.core_invincible {
+				c.hp = tile_max_hp(.Core, c.tier)
+				g.world.tiles[g.world.core] = c
+			} else if c.hp <= 0 {
+				g.world.game_over = true
+			}
+		}
+
+		// Victory: the final wave fired, ended, and every enemy on the field is
+		// dead. Trickle still ticks past the final surge — but the early-return
+		// in `waves_update` blocks any further surges, so once the player
+		// catches up to the trickle the field genuinely clears.
+		if !g.world.game_over &&
+		   g.world.waves.surge_index > FINAL_WAVE_INDEX &&
+		   !g.world.waves.surge_active &&
+		   len(g.world.enemies) == 0 {
+			g.world.victory = true
 		}
 	} else {
 		// While paused / game-over `flaks_fire` doesn't run, so its per-frame
@@ -461,7 +486,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	mouse_in_abilities := mouse_in_bomb || mouse_in_emp
 	ui_track_hover(&g.ui, p, mouse_in_bomb, ui_button_key(bomb_x, bomb_y))
 	ui_track_hover(&g.ui, p, mouse_in_emp,  ui_button_key(emp_x,  emp_y))
-	if !paused && !g.world.game_over {
+	if !paused && !g.world.game_over && !g.world.victory {
 		if mouse_in_bomb && p.mouse_left_pressed && world_can_use_bomb(&g.world) {
 			g.mode = .Target_Bomb
 			g.has_selection = false
@@ -505,7 +530,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	// Place / remove via mouse on the world (suppressed when over the picker bar)
 	lmb_just := p.mouse_left_pressed
 	shift_held := p->is_key_down(.Left_Shift) || p->is_key_down(.Right_Shift)
-	if !paused && !mouse_in_picker && !mouse_in_panel && !mouse_in_gear && !mouse_in_abilities && !g.world.game_over {
+	if !paused && !mouse_in_picker && !mouse_in_panel && !mouse_in_gear && !mouse_in_abilities && !g.world.game_over && !g.world.victory {
 		if lmb_just && g.mode == .Target_Bomb {
 			// Drop the bomb at the hovered hex's pixel centre so the AoE
 			// reads as anchored to a tile rather than a cursor pixel.
@@ -568,7 +593,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		g.hover_smoothed.y += (hover_target.y - g.hover_smoothed.y) * t
 	}
 
-	if !g.world.game_over {
+	if !g.world.game_over && !g.world.victory {
 		world_render_hover(&g.world, p, hover, g.hover_smoothed, g.mode == .Place, g.selected_kind)
 
 		// Bomb-target preview: orange ring at exactly the damage radius so the
@@ -690,17 +715,24 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	// Per-kind tally so a "huge" total can be read at a glance — useful for
 	// spotting trickle pile-up vs. a fresh surge. Hotkeys live on the same row
 	// since they're a debug spawn aid that pairs with the same vocabulary.
-	enemy_crawlers, enemy_brutes, enemy_spitters, enemy_swarmers, enemy_flyers: i32
+	enemy_crawlers, enemy_brutes, enemy_spitters, enemy_swarmers, enemy_flyers, enemy_bosses: i32
 	for e in g.world.enemies {
 		switch e.kind {
-		case .Crawler: enemy_crawlers += 1
-		case .Brute:   enemy_brutes   += 1
-		case .Spitter: enemy_spitters += 1
-		case .Swarmer: enemy_swarmers += 1
-		case .Flyer:   enemy_flyers   += 1
+		case .Crawler:      enemy_crawlers += 1
+		case .Brute:        enemy_brutes   += 1
+		case .Spitter:      enemy_spitters += 1
+		case .Swarmer:      enemy_swarmers += 1
+		case .Flyer:        enemy_flyers   += 1
+		case .Brute_Boss, .Spitter_Boss, .Flyer_Boss: enemy_bosses += 1
 		}
 	}
-	p->draw_text(hud_text_x, y4, fmt.tprintf("%d  (C %d  B %d  V %d  N %d  F %d)", len(g.world.enemies), enemy_crawlers, enemy_brutes, enemy_spitters, enemy_swarmers, enemy_flyers), {0.96, 0.78, 0.78, 1}, .Small)
+	count_str: string
+	if enemy_bosses > 0 {
+		count_str = fmt.tprintf("%d  (C %d  B %d  V %d  N %d  F %d  BOSS %d)", len(g.world.enemies), enemy_crawlers, enemy_brutes, enemy_spitters, enemy_swarmers, enemy_flyers, enemy_bosses)
+	} else {
+		count_str = fmt.tprintf("%d  (C %d  B %d  V %d  N %d  F %d)", len(g.world.enemies), enemy_crawlers, enemy_brutes, enemy_spitters, enemy_swarmers, enemy_flyers)
+	}
+	p->draw_text(hud_text_x, y4, count_str, {0.96, 0.78, 0.78, 1}, .Small)
 
 	// Big timer at top-center.
 	timer_str := fmt.tprintf("%.1fs", g.world.survive_time)
@@ -844,6 +876,18 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		tw := p->text_measure(tip,  .Small)
 		cy := sh * 0.5
 		p->draw_text((sw - hw) * 0.5, cy - 28, head, {1.00, 0.82, 0.82, 1}, .Large)
+		p->draw_text((sw - bw) * 0.5, cy + 24, body, {0.96, 0.96, 0.96, 1},  .Small)
+		p->draw_text((sw - tw) * 0.5, cy + 56, tip,  {0.78, 0.86, 1.00, 1},  .Small)
+	} else if g.world.victory {
+		p->draw_rect(0, 0, sw, sh, {0, 0, 0, 0.65})
+		head := "CORE HELD  -  ALL WAVES CLEARED"
+		body := fmt.tprintf("Survived %.1fs   |   Scrap collected: %d", g.world.survive_time, g.world.scrap)
+		tip  := "Press R to restart"
+		hw := p->text_measure(head, .Large)
+		bw := p->text_measure(body, .Small)
+		tw := p->text_measure(tip,  .Small)
+		cy := sh * 0.5
+		p->draw_text((sw - hw) * 0.5, cy - 28, head, {0.78, 1.00, 0.82, 1}, .Large)
 		p->draw_text((sw - bw) * 0.5, cy + 24, body, {0.96, 0.96, 0.96, 1},  .Small)
 		p->draw_text((sw - tw) * 0.5, cy + 56, tip,  {0.78, 0.86, 1.00, 1},  .Small)
 	}
