@@ -1434,7 +1434,8 @@ let exports;
 			// affine is active when fog lights are pushed.
 			bgCam = { sx: 1, sy: 1, ox: 0, oy: 0 };
 
-			exports.web_frame(dt, time, canvas.width, canvas.height, mouseX, mouseY, dy, mouseLeftThisFrame, mouseRight);
+			const isFullscreen = document.fullscreenElement ? 1 : 0;
+			exports.web_frame(dt, time, canvas.width, canvas.height, mouseX, mouseY, dy, mouseLeftThisFrame, mouseRight, isFullscreen);
 
 			// Tap cleanup: drop LMB and park the mouse off-canvas so the
 			// next-frame edge of mouse_left_down → false fires, and edge-pan

@@ -63,6 +63,11 @@ Platform :: struct {
 	mouse_left_down,    mouse_left_pressed:  bool,
 	mouse_right_down,   mouse_right_pressed: bool,
 	should_close:       bool,
+	// Host writes true while the window is in fullscreen (borderless on win32,
+	// Fullscreen API on web). Edge scrolling gates on this — in windowed mode
+	// the cursor can naturally leave the window, so the edge zone would pan
+	// every time the player reached for another app.
+	is_fullscreen:      bool,
 
 	// Input ----------------------------------------------------------------
 	is_key_down:         proc "contextless" (p: ^Platform, key: Key) -> bool,

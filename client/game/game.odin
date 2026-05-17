@@ -350,7 +350,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	// Suppressed while RMB is held — that gesture is already a pan, and on
 	// touch (where a drag synthesises RMB) the finger sitting at the screen
 	// edge during a pan would otherwise double the camera velocity.
-	if !paused && !p.mouse_right_down && p.mouse.x >= 0 && p.mouse.y >= 0 && p.mouse.x < sw && p.mouse.y < sh {
+	if !paused && p.is_fullscreen && !p.mouse_right_down && p.mouse.x >= 0 && p.mouse.y >= 0 && p.mouse.x < sw && p.mouse.y < sh {
 		edge: [2]f32
 		if p.mouse.x < EDGE_MARGIN          do edge.x = -(1 - p.mouse.x / EDGE_MARGIN)
 		else if p.mouse.x > sw - EDGE_MARGIN do edge.x =  1 - (sw - p.mouse.x) / EDGE_MARGIN
@@ -393,11 +393,11 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	}
 
 	if !paused && !g.world.game_over && !g.world.victory {
-		if p->is_key_just_pressed(.C) do enemy_spawn(&g.world, .Crawler)
-		if p->is_key_just_pressed(.B) do enemy_spawn(&g.world, .Brute)
-		if p->is_key_just_pressed(.V) do enemy_spawn(&g.world, .Spitter)
-		if p->is_key_just_pressed(.N) do enemy_spawn(&g.world, .Swarmer)
-		if p->is_key_just_pressed(.F) do enemy_spawn(&g.world, .Flyer)
+		// if p->is_key_just_pressed(.C) do enemy_spawn(&g.world, .Crawler)
+		// if p->is_key_just_pressed(.B) do enemy_spawn(&g.world, .Brute)
+		// if p->is_key_just_pressed(.V) do enemy_spawn(&g.world, .Spitter)
+		// if p->is_key_just_pressed(.N) do enemy_spawn(&g.world, .Swarmer)
+		// if p->is_key_just_pressed(.F) do enemy_spawn(&g.world, .Flyer)
 
 		// Ability hotkeys. Q enters bomb-target mode (acts like Place but for
 		// a one-shot AoE); E fires the EMP instantly. Both gate on the

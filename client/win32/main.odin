@@ -167,6 +167,7 @@ main :: proc() {
 		platform.mouse_right_pressed = app.mouse_right_down && !app.mouse_right_was_down
 		platform.scroll_dy          = scroll_dy
 		platform.should_close       = false
+		platform.is_fullscreen      = app.is_fullscreen
 
 		if !gfx_begin(&app.graphics) {
 			// Lost the swapchain; the recreate path runs from the fullscreen

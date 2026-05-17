@@ -101,6 +101,7 @@ web_frame :: proc "c" (
 	dt, t, sw, sh: f32,
 	mx, my, scroll_dy: f32,
 	mouse_left, mouse_right: i32,
+	is_fullscreen: i32,
 ) {
 	context = runtime.default_context()
 	if !g_started do return
@@ -118,6 +119,7 @@ web_frame :: proc "c" (
 	g_platform.mouse_right_pressed = new_right && !g_platform.mouse_right_down
 	g_platform.mouse_left_down  = new_left
 	g_platform.mouse_right_down = new_right
+	g_platform.is_fullscreen    = is_fullscreen != 0
 
 	game.game_update_and_render(&g_game, &g_platform)
 
