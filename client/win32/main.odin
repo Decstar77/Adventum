@@ -105,6 +105,8 @@ main :: proc() {
 		fog_lights_push     = plat_fog_lights_push,
 		toggle_fullscreen   = plat_toggle_fullscreen,
 		request_quit        = plat_request_quit,
+		request_midgame_ad  = plat_request_midgame_ad,
+		request_happytime   = plat_request_happytime,
 		play_sound          = plat_play_sound,
 		play_sound_at       = plat_play_sound_at,
 		set_sound_loop      = plat_set_sound_loop,
@@ -370,6 +372,12 @@ plat_toggle_fullscreen :: proc(p: ^game.Platform) {
 plat_request_quit :: proc(p: ^game.Platform) {
 	app_of(p).should_quit = true
 }
+
+// CrazyGames hooks are no-ops on the desktop build — no SDK to talk to.
+@(private="file")
+plat_request_midgame_ad :: proc(p: ^game.Platform) {}
+@(private="file")
+plat_request_happytime  :: proc(p: ^game.Platform) {}
 
 @(private="file")
 plat_play_sound :: proc(p: ^game.Platform, sound: game.Sound) {

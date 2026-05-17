@@ -93,6 +93,15 @@ Platform :: struct {
 	toggle_fullscreen: proc(p: ^Platform),
 	request_quit:      proc(p: ^Platform),
 
+	// Embedded-host hooks (CrazyGames). No-ops on win32.
+	//   request_midgame_ad — fired once on the rising edge of game_over so the
+	//     SDK can show an interstitial between runs. The game-over screen is
+	//     already up by the time this fires, so the ad never interrupts play.
+	//   request_happytime  — fired once on victory; lets the SDK notify the
+	//     player's friends / surface a "you won!" moment per CG guidelines.
+	request_midgame_ad: proc(p: ^Platform),
+	request_happytime:  proc(p: ^Platform),
+
 	// Lifecycle hint for embedded hosts (e.g. CrazyGames gameplayStart/Stop,
 	// ad SDKs). The game writes this each frame: true while the player is in
 	// an active run, false while paused, on a game-over/victory screen, or

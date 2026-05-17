@@ -5,8 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
 <title>Adventum</title>
 <style>
+  /* SUSE Mono is the same font the win32 build bakes into its glyph atlas
+     (FONT_PIXEL_SIZE=32 in adv_text.odin). Loading it as a webfont keeps the
+     web build visually identical to native — without it the canvas falls back
+     to the system monospace which is wider / has different bearings. */
+  @font-face {
+    font-family: "SUSE Mono";
+    src: url("res/fonts/SUSEMono-Regular.ttf") format("truetype");
+    font-weight: 400;
+    font-style: normal;
+    font-display: block; /* hold the splash until the font is ready */
+  }
   html, body { margin: 0; padding: 0; background: #050507; height: 100%; overflow: hidden; }
-  body { font-family: monospace; color: #aab; }
+  body { font-family: "SUSE Mono", monospace; color: #aab; }
   /* Stage fills the iframe. Both canvases use the same pixel dimensions,
      resized to match the viewport on load/resize so the WebGL background
      and 2D shapes/text stay aligned. */

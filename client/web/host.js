@@ -57,6 +57,49 @@ function setGameplayActive(active) {
 	} catch (err) { console.warn('CG gameplay state:', err); }
 }
 
+// Midgame ad on death. The SDK's requestAd takes callbacks that bracket the
+// ad render — we use them to mute audio (master gain to 0, music paused) so
+// the player doesn't hear two soundtracks at once. The game is already on the
+// game-over screen by the time this fires, so we don't have to pause the sim.
+//
+// Falls through to a no-op when the SDK isn't ready (local dev server, or
+// review build before the SDK injects). One in-flight ad at a time — extra
+// requests while an ad is rendering are dropped to keep audio state sane.
+let adInFlight = false;
+function requestMidgameAd() {
+	if (!cgReady || !CG.ad || typeof CG.ad.requestAd !== 'function') return;
+	if (adInFlight) return;
+	adInFlight = true;
+	const onStart = () => {
+		// Suspend the AudioContext (cheaper than per-source mutes) and pause
+		// music elements so the ad's audio comes through cleanly.
+		try { audioCtx && audioCtx.suspend(); } catch {}
+		musicPause();
+	};
+	const onFinish = () => {
+		adInFlight = false;
+		// Resume audio only if the player is back in a state where they'd
+		// expect it: the game might have been restarted / unpaused while the
+		// ad ran. resumeAudio is idempotent on an already-running context.
+		resumeAudio();
+	};
+	try {
+		CG.ad.requestAd('midgame', {
+			adStarted:  onStart,
+			adFinished: onFinish,
+			adError:    (err) => { console.warn('CG ad error:', err); onFinish(); },
+		});
+	} catch (err) {
+		console.warn('CG requestAd failed:', err);
+		adInFlight = false;
+	}
+}
+
+function requestHappytime() {
+	if (!cgReady || !CG.game || typeof CG.game.happytime !== 'function') return;
+	try { CG.game.happytime(); } catch (err) { console.warn('CG happytime:', err); }
+}
+
 // --- Persistence ------------------------------------------------------------
 // Prefer the CrazyGames user-scoped data API (cloud-synced when the player is
 // logged in); fall back to localStorage so the local build still persists
@@ -417,7 +460,12 @@ function playSound(soundIdx) {
 	const src = audioCtx.createBufferSource();
 	src.buffer = buf;
 	const gain = audioCtx.createGain();
-	gain.gain.value = Math.min(1, SOUND_GAIN[soundIdx] ?? 1);
+	// SOUND_GAIN > 1 is intentional for quiet source clips (Place_Building is
+	// mixed at 3× to match the win32 backend). Web Audio GainNode is unclamped
+	// — the master gain → destination path can still clip if the family is
+	// over-gained, but that mirrors win32's behaviour so the two backends stay
+	// in sync. Don't clamp here.
+	gain.gain.value = SOUND_GAIN[soundIdx] ?? 1;
 	src.connect(gain).connect(audioMasterGain);
 	src.start();
 }
@@ -470,7 +518,8 @@ function playSoundAt(soundIdx, xPx, yPx) {
 	src.buffer = buf;
 	src.onended = () => { activeVoiceCount[soundIdx]--; };
 	const gain = audioCtx.createGain();
-	gain.gain.value = Math.min(1, SOUND_GAIN[soundIdx] ?? 1);
+	// See note in playSound: SOUND_GAIN > 1 is intentional, don't clamp.
+	gain.gain.value = SOUND_GAIN[soundIdx] ?? 1;
 	const panner = audioCtx.createPanner();
 	panner.panningModel    = 'HRTF';
 	panner.distanceModel   = 'linear';
@@ -647,7 +696,8 @@ function setSoundLoop(soundIdx, active, xPx, yPx) {
 	src.buffer = buf;
 	src.loop = true;
 	const gain = audioCtx.createGain();
-	gain.gain.value = Math.min(1, SOUND_GAIN[soundIdx] ?? 1);
+	// See note in playSound: SOUND_GAIN > 1 is intentional, don't clamp.
+	gain.gain.value = SOUND_GAIN[soundIdx] ?? 1;
 	const panner = audioCtx.createPanner();
 	panner.panningModel  = 'HRTF';
 	panner.distanceModel = 'linear';
@@ -685,8 +735,13 @@ function rgba(r, g, b, a) {
 	return `rgba(${R},${G},${B},${a})`;
 }
 
+// Matches the win32 build (which bakes SUSEMono-Regular.ttf at 32px into a
+// glyph atlas). The fallback to monospace covers the brief window before the
+// @font-face load resolves; once `document.fonts.ready` fires every measure +
+// draw uses SUSE Mono. Sizes mirror the win32 font_size_px ladder.
 function fontStr(font) {
-	return font === 1 ? '32px monospace' : '16px monospace';
+	return font === 1 ? '32px "SUSE Mono", monospace'
+	                  : '16px "SUSE Mono", monospace';
 }
 
 const host = {
@@ -760,6 +815,8 @@ const host = {
 		if (audioMasterGain) audioMasterGain.gain.value = masterVolume;
 	},
 	js_set_gameplay_active: (active) => { setGameplayActive(active !== 0); },
+	js_request_midgame_ad:  () => { requestMidgameAd(); },
+	js_request_happytime:   () => { requestHappytime(); },
 	js_save_f32: (ptr, len, value) => {
 		const key = decodeString(ptr, len);
 		if (!key) return;
@@ -897,9 +954,24 @@ async function fetchWithProgress(url, report) {
 // dimensions to the viewport so the game (which renders directly in
 // screen-pixel coords) fills the iframe at 1:1 without letterboxing.
 const bgStage = document.getElementById('stage');
+// Backing-store size matches CSS pixels × devicePixelRatio so the game renders
+// crisp on retina / 4K displays. CSS sizes the canvas at 100vw × 100vh
+// (index.html) so the bigger backing store displays at the same physical
+// size, just sharper. The game reads `screen_w/screen_h` from the canvas's
+// pixel dimensions and lays out everything in those coords, so a 1440p
+// monitor at DPR 2 gives the game a 2880×1620 logical surface — that's also
+// what we want for the WebGL background shader's u_screen.
+//
+// Mouse coords are already DPR-correct via the `(canvas.width / r.width)`
+// scale in the mousemove handler, since `r.width` stays in CSS pixels.
+//
+// We cap the DPR at 2 so a 4K phone reporting DPR=3 doesn't push the canvas
+// to 3840×2160 — fillRect / arc on a Canvas2D of that size halves frame rate
+// on integrated GPUs and the visual difference past 2× is marginal.
 function resizeCanvases() {
-	const w = Math.max(1, window.innerWidth  | 0);
-	const h = Math.max(1, window.innerHeight | 0);
+	const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+	const w = Math.max(1, Math.round(window.innerWidth  * dpr));
+	const h = Math.max(1, Math.round(window.innerHeight * dpr));
 	if (canvas.width  !== w) canvas.width  = w;
 	if (canvas.height !== h) canvas.height = h;
 	if (bgCanvas && (bgCanvas.width !== w || bgCanvas.height !== h)) {
@@ -909,6 +981,16 @@ function resizeCanvases() {
 }
 resizeCanvases();
 window.addEventListener('resize', resizeCanvases);
+// Re-resize when the browser zoom changes (which moves devicePixelRatio) so
+// the canvas stays crisp through Ctrl+/Ctrl- as well as monitor changes.
+if (typeof matchMedia === 'function') {
+	const watchDpr = () => {
+		resizeCanvases();
+		matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`)
+			.addEventListener('change', watchDpr, { once: true });
+	};
+	watchDpr();
+}
 
 // --- Window blur / tab-hidden handling --------------------------------------
 // When the player tabs away or the browser hides the iframe, force the game
@@ -1035,6 +1117,22 @@ let exports;
 		// Wait for audio decode to finish too so the splash doesn't disappear
 		// while the player is still waiting for sounds to be ready.
 		await audioPromise;
+		// And wait for SUSE Mono to load — text_measure on the first frame
+		// reads ctx.measureText which silently falls back to the system
+		// monospace until the @font-face load resolves, and that fallback has
+		// different glyph widths. Forcing both metric weights to load here
+		// guarantees the first frame's layout already uses SUSE Mono.
+		if (document.fonts && document.fonts.load) {
+			try {
+				await Promise.race([
+					Promise.all([
+						document.fonts.load('16px "SUSE Mono"'),
+						document.fonts.load('32px "SUSE Mono"'),
+					]),
+					new Promise(r => setTimeout(r, 2000)), // never block the boot indefinitely
+				]);
+			} catch {}
+		}
 		setProgress(1);
 
 		initBackgroundGL();

@@ -44,6 +44,10 @@ foreign host {
 	// CrazyGames SDK lifecycle hint. Host edge-detects on the boolean and
 	// calls gameplayStart() / gameplayStop().
 	js_set_gameplay_active :: proc(active: i32) ---
+	// CrazyGames midgame ad + happytime. The host gates both on SDK readiness
+	// and falls back to a no-op when the SDK isn't loaded (local dev server).
+	js_request_midgame_ad  :: proc() ---
+	js_request_happytime   :: proc() ---
 	// Persistence. Host writes via CrazyGames SDK cloud save with a
 	// localStorage fallback; reads with the same fallback chain.
 	js_save_f32          :: proc(key_ptr: rawptr, key_len: i32, value: f32) ---
@@ -152,6 +156,8 @@ make_platform :: proc() -> game.Platform {
 		fog_lights_push     = plat_fog_lights_push,
 		toggle_fullscreen   = plat_toggle_fullscreen,
 		request_quit        = plat_request_quit,
+		request_midgame_ad  = plat_request_midgame_ad,
+		request_happytime   = plat_request_happytime,
 		play_sound          = plat_play_sound,
 		play_sound_at       = plat_play_sound_at,
 		set_sound_loop      = plat_set_sound_loop,
@@ -257,3 +263,9 @@ plat_toggle_fullscreen :: proc(p: ^game.Platform) { js_toggle_fullscreen() }
 
 @(private="file")
 plat_request_quit :: proc(p: ^game.Platform) { js_request_quit() }
+
+@(private="file")
+plat_request_midgame_ad :: proc(p: ^game.Platform) { js_request_midgame_ad() }
+
+@(private="file")
+plat_request_happytime :: proc(p: ^game.Platform) { js_request_happytime() }

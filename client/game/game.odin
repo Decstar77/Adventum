@@ -281,6 +281,15 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 			g.best_time = g.world.survive_time
 			if p.save_f32 != nil do p->save_f32("best_time", g.best_time)
 		}
+		// CrazyGames hooks. Midgame interstitial on death (between runs, never
+		// between waves); happytime only on victory (final wave cleared). Both
+		// gated by `run_result_saved` so they fire exactly once per run.
+		if g.world.game_over && p.request_midgame_ad != nil {
+			p->request_midgame_ad()
+		}
+		if g.world.victory && p.request_happytime != nil {
+			p->request_happytime()
+		}
 		g.run_result_saved = true
 	}
 
