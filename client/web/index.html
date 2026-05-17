@@ -22,7 +22,9 @@
      resized to match the viewport on load/resize so the WebGL background
      and 2D shapes/text stay aligned. */
   #stage  { position: fixed; inset: 0; width: 100vw; height: 100vh; }
-  #stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: default; }
+  /* touch-action: none stops the browser from interpreting drags/pinches as
+     page scroll or pinch-zoom so host.js can consume them as camera pan/zoom. */
+  #stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: default; touch-action: none; -webkit-user-select: none; user-select: none; }
   #screen { image-rendering: pixelated; background: transparent; }
   #bg     { background: #050507; }
 

@@ -347,7 +347,10 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 
 	// Mouse edge scroll: only when the cursor is inside the window. Pan
 	// speed ramps from 0 at EDGE_MARGIN inward to full speed at the edge.
-	if !paused && p.mouse.x >= 0 && p.mouse.y >= 0 && p.mouse.x < sw && p.mouse.y < sh {
+	// Suppressed while RMB is held — that gesture is already a pan, and on
+	// touch (where a drag synthesises RMB) the finger sitting at the screen
+	// edge during a pan would otherwise double the camera velocity.
+	if !paused && !p.mouse_right_down && p.mouse.x >= 0 && p.mouse.y >= 0 && p.mouse.x < sw && p.mouse.y < sh {
 		edge: [2]f32
 		if p.mouse.x < EDGE_MARGIN          do edge.x = -(1 - p.mouse.x / EDGE_MARGIN)
 		else if p.mouse.x > sw - EDGE_MARGIN do edge.x =  1 - (sw - p.mouse.x) / EDGE_MARGIN

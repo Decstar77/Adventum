@@ -1056,6 +1056,148 @@ canvas.addEventListener('wheel', (e) => {
 	e.preventDefault();
 }, { passive: false });
 
+// --- Touch input ------------------------------------------------------------
+// CrazyGames serves the build to mobile/tablet players where there is no
+// mouse and no keyboard. We synthesise the same `mouseX/Y/mouseLeft/mouseRight/
+// scrollDy` state the wasm host reads so the game code (which only knows about
+// mouse + keys) needs zero awareness of touch.
+//
+// Gestures:
+//   1-finger tap   (no/small drag)   -> one-frame LMB press at the touch
+//   1-finger drag  (past TAP_PX)     -> RMB held; finger position becomes the
+//                                       mouse, so the game's existing RMB-pan
+//                                       path handles camera movement
+//   2-finger pinch                   -> scroll-wheel ticks for zoom, anchored
+//                                       at the midpoint between fingers
+//
+// After every gesture ends we park the mouse at (-1, -1) so the game's edge-
+// pan / hover logic goes inert until the next touch — finger-up should mean
+// "no mouse", not "mouse stuck at the last finger position".
+
+const TOUCH_TAP_PX        = 8;   // CSS px of drift before a touch becomes a drag
+const TOUCH_PINCH_GAIN    = 5.0; // converts log2(distRatio) into scrollDy ticks
+
+let touchPanActive = false;
+let touchStartX = 0, touchStartY = 0;
+let touchMaxDist = 0;
+let pinchActive   = false;
+let pinchPrevDist = 0;
+let pendingTap    = null;   // {x, y} consumed on the next frame
+let tapInFlight   = null;   // {x, y} active for the current frame only
+
+function touchToCanvas(t) {
+	const r = canvas.getBoundingClientRect();
+	return [
+		(t.clientX - r.left) * (canvas.width  / r.width),
+		(t.clientY - r.top)  * (canvas.height / r.height),
+	];
+}
+
+function endTouchPan() {
+	if (touchPanActive) {
+		mouseRight     = 0;
+		touchPanActive = false;
+	}
+}
+
+canvas.addEventListener('touchstart', (e) => {
+	e.preventDefault();
+	resumeAudio();
+	canvas.focus();
+	if (e.touches.length === 1) {
+		const [x, y] = touchToCanvas(e.touches[0]);
+		mouseX = x; mouseY = y;
+		touchStartX = x; touchStartY = y;
+		touchMaxDist = 0;
+		touchPanActive = false;
+		pinchActive    = false;
+	} else if (e.touches.length >= 2) {
+		// Second finger landed mid-pan: cancel the pan before pinching so the
+		// next single-finger drag re-baselines instead of jumping.
+		endTouchPan();
+		pinchActive = true;
+		const [ax, ay] = touchToCanvas(e.touches[0]);
+		const [bx, by] = touchToCanvas(e.touches[1]);
+		pinchPrevDist = Math.hypot(bx - ax, by - ay);
+		mouseX = (ax + bx) * 0.5;
+		mouseY = (ay + by) * 0.5;
+	}
+}, { passive: false });
+
+canvas.addEventListener('touchmove', (e) => {
+	e.preventDefault();
+	if (pinchActive && e.touches.length >= 2) {
+		const [ax, ay] = touchToCanvas(e.touches[0]);
+		const [bx, by] = touchToCanvas(e.touches[1]);
+		const dist = Math.hypot(bx - ax, by - ay);
+		if (pinchPrevDist > 0 && dist > 0) {
+			// The wheel handler does scrollDy += -sign(deltaY), so each tick
+			// scales zoom by 1 ± 0.1. Pinch should be continuous, so we emit
+			// fractional ticks proportional to the log of the distance ratio.
+			scrollDy += Math.log2(dist / pinchPrevDist) * TOUCH_PINCH_GAIN;
+		}
+		pinchPrevDist = dist;
+		mouseX = (ax + bx) * 0.5;
+		mouseY = (ay + by) * 0.5;
+		return;
+	}
+	if (e.touches.length === 1) {
+		const [x, y] = touchToCanvas(e.touches[0]);
+		const d = Math.hypot(x - touchStartX, y - touchStartY);
+		if (d > touchMaxDist) touchMaxDist = d;
+		if (!touchPanActive && d > TOUCH_TAP_PX) {
+			// Promote to drag. Snap the mouse to the current finger position
+			// first so the game's `mouse_delta` on the RMB-down frame is 0 —
+			// otherwise the first pan would jump by the accumulated drift.
+			mouseX = x; mouseY = y;
+			mouseRight = 1;
+			touchPanActive = true;
+		} else if (touchPanActive) {
+			mouseX = x; mouseY = y;
+		}
+	}
+}, { passive: false });
+
+canvas.addEventListener('touchend', (e) => {
+	e.preventDefault();
+	if (pinchActive) {
+		if (e.touches.length >= 2) return;
+		pinchActive = false;
+		if (e.touches.length === 1) {
+			// One finger still down after a pinch. Rebaseline so the remaining
+			// finger doesn't read as a tap on lift, and the next drag pans
+			// from the current position.
+			const [x, y] = touchToCanvas(e.touches[0]);
+			mouseX = x; mouseY = y;
+			touchStartX = x; touchStartY = y;
+			touchMaxDist = TOUCH_TAP_PX + 1; // suppress tap on final lift
+			touchPanActive = false;
+		} else {
+			mouseX = -1; mouseY = -1;
+		}
+		return;
+	}
+	if (touchPanActive) {
+		endTouchPan();
+		mouseX = -1; mouseY = -1;
+		return;
+	}
+	if (e.touches.length === 0 && touchMaxDist <= TOUCH_TAP_PX) {
+		// Queue a tap. The frame loop synthesises a one-frame LMB press at
+		// (touchStartX, touchStartY) before calling web_frame, which lets the
+		// game's existing `mouse_left_pressed` edge fire for selections, place
+		// mode, UI buttons, etc.
+		pendingTap = { x: touchStartX, y: touchStartY };
+	}
+}, { passive: false });
+
+canvas.addEventListener('touchcancel', (e) => {
+	endTouchPan();
+	pinchActive = false;
+	pendingTap = null;
+	mouseX = -1; mouseY = -1;
+}, { passive: false });
+
 const PREVENT_DEFAULT = new Set(['Tab', 'Space', ...Object.keys(KEY)]);
 
 window.addEventListener('keydown', (e) => {
@@ -1169,6 +1311,21 @@ let exports;
 			last = now;
 			const dy = scrollDy; scrollDy = 0;
 
+			// Inject any queued one-frame tap. We set the mouse to the touch
+			// point and force mouseLeft=1 for this frame; the game derives
+			// `mouse_left_pressed` from the 0→1 edge so a single frame of
+			// LMB-down is enough. The cleanup after web_frame restores the
+			// "no mouse" state so edge-pan/hover stay inert.
+			let tapMouseLeftOverride = -1;
+			if (pendingTap) {
+				tapInFlight = pendingTap;
+				pendingTap  = null;
+				mouseX = tapInFlight.x;
+				mouseY = tapInFlight.y;
+				tapMouseLeftOverride = 1;
+			}
+			const mouseLeftThisFrame = tapMouseLeftOverride >= 0 ? tapMouseLeftOverride : mouseLeft;
+
 			// Clear the 2D canvas to transparent so the WebGL background
 			// canvas underneath is visible. clearRect is the cheap way to
 			// drop everything from the previous frame without painting a
@@ -1182,7 +1339,15 @@ let exports;
 			// affine is active when fog lights are pushed.
 			bgCam = { sx: 1, sy: 1, ox: 0, oy: 0 };
 
-			exports.web_frame(dt, time, canvas.width, canvas.height, mouseX, mouseY, dy, mouseLeft, mouseRight);
+			exports.web_frame(dt, time, canvas.width, canvas.height, mouseX, mouseY, dy, mouseLeftThisFrame, mouseRight);
+
+			// Tap cleanup: drop LMB and park the mouse off-canvas so the
+			// next-frame edge of mouse_left_down → false fires, and edge-pan
+			// stays disabled until the next touch.
+			if (tapInFlight) {
+				tapInFlight = null;
+				mouseX = -1; mouseY = -1;
+			}
 
 			// Tick music last so it picks up the freshest masterVolume the
 			// game just pushed via js_set_master_volume.
