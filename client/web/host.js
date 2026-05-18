@@ -65,28 +65,21 @@ async function initCrazyGames() {
 			cgDataSync = !(probe && typeof probe.then === 'function');
 		} catch { cgDataSync = false; }
 	}
-	// Respect the CG navbar mute toggle — required for review. The SDK exposes
-	// both an initial state getter and a listener; shapes vary slightly across
-	// SDK builds so we feature-detect each.
+	// Respect the CG navbar mute toggle — required for review. In SDK v3 this
+	// lives at CG.game.settings.muteAudio (initial) + addSettingsChangeListener
+	// (updates); the listener receives the full settings object on each change.
+	// Test locally with `?muteAudio=true`.
 	try {
-		const user = CG.user;
-		if (user) {
-			if (typeof user.isUserAccountAvailable !== 'undefined') { /* no-op, just touch */ }
-			if (typeof user.getSystemInfo === 'function') { /* available for future use */ }
-		}
-		// Mute API: in v3 this lives on SDK.user.addMuteListener / getMuteState
-		// on some builds, and on SDK.game on others. Try both.
-		const muteHost = (CG.user && typeof CG.user.addMuteListener === 'function') ? CG.user
-		             : (CG.game && typeof CG.game.addMuteListener === 'function') ? CG.game
-		             : null;
-		if (muteHost) {
-			if (typeof muteHost.getMuteState === 'function') {
-				try { cgMuted = !!muteHost.getMuteState(); } catch {}
+		if (CG.game) {
+			if (CG.game.settings && typeof CG.game.settings.muteAudio === 'boolean') {
+				cgMuted = !!CG.game.settings.muteAudio;
 			}
-			muteHost.addMuteListener((muted) => {
-				cgMuted = !!muted;
-				applyCgMute();
-			});
+			if (typeof CG.game.addSettingsChangeListener === 'function') {
+				CG.game.addSettingsChangeListener((settings) => {
+					cgMuted = !!(settings && settings.muteAudio);
+					applyCgMute();
+				});
+			}
 			applyCgMute();
 		}
 	} catch (err) { console.warn('CG mute listener wiring failed:', err); }
@@ -462,7 +455,7 @@ function initAudioContext() {
 	if (!Ctx) return null;
 	audioCtx = new Ctx();
 	audioMasterGain = audioCtx.createGain();
-	audioMasterGain.gain.value = masterVolume;
+	audioMasterGain.gain.value = cgMuted ? 0 : masterVolume;
 	// SOUND_GAIN values > 1 (Place_Building at 3×, mirroring win32) can clip
 	// the destination on a salvo; Web Audio has no soft-clipper on the output.
 	// A gentle compressor between master and destination prevents the harsh
@@ -530,6 +523,7 @@ async function preloadAudio(report) {
 function playSound(soundIdx) {
 	const variants = SOUND_FILES[soundIdx];
 	if (!variants || variants.length === 0 || !audioCtx) return;
+	if (cgMuted) return;
 	resumeAudio();
 
 	const minIv = SOUND_MIN_INTERVAL_MS[soundIdx] || 0;
@@ -579,6 +573,7 @@ function setListener(xPx, yPx) {
 function playSoundAt(soundIdx, xPx, yPx) {
 	const variants = SOUND_FILES[soundIdx];
 	if (!variants || variants.length === 0 || !audioCtx) return;
+	if (cgMuted) return;
 	resumeAudio();
 
 	// Share the per-family cooldown with the non-spatial path so a salvo of
@@ -688,6 +683,7 @@ function musicSpawn(idx) {
 
 function musicTick(dt) {
 	if (!music.enabled) return;
+	if (cgMuted) return;
 
 	// Cold start (or restart after a failed play()): begin a track.
 	if (!music.current) {
@@ -744,6 +740,7 @@ function musicPause() {
 }
 function musicResume() {
 	if (!music.enabled) return;
+	if (cgMuted) return;
 	music.current?.audio.play().catch(() => { music.needsStart = true; });
 	music.incoming?.audio.play().catch(() => { music.needsStart = true; });
 }
@@ -758,7 +755,7 @@ function setSoundLoop(soundIdx, active, xPx, yPx) {
 	const variants = SOUND_FILES[soundIdx];
 	if (!variants || variants.length === 0) return;
 	const existing = loopVoices[soundIdx];
-	if (!active) {
+	if (!active || cgMuted) {
 		if (!existing) return;
 		try { existing.src.stop(); } catch {}
 		try { existing.src.disconnect(); } catch {}
