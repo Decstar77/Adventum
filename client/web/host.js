@@ -108,21 +108,20 @@ function setGameplayActive(active) {
 // Falls through to a no-op when the SDK isn't ready (local dev server, or
 // review build before the SDK injects). One in-flight ad at a time — extra
 // requests while an ad is rendering are dropped to keep audio state sane.
-// CrazyGames policy: no mid-game ad within ~60 s of session start, and ≥60 s
-// between ads. We enforce both client-side so a fast restart loop after death
-// can't fire ads back-to-back (which fails QA review). `sessionStartMs` is set
-// once at module load; `lastAdEndMs` tracks the most recent finished ad.
+// CrazyGames policy: ≥60 s between mid-game ads. We enforce client-side so a
+// fast restart loop after death can't fire ads back-to-back. CG's own preroll
+// handles the front of the session, so we don't gate the first ad on a
+// session-warmup timer — that was eating the first-death ad in playtests where
+// a run ends in under a minute. `lastAdEndMs` tracks the most recent finished
+// ad; the `-Infinity` sentinel lets the first request through unconditionally.
 const AD_MIN_INTERVAL_MS  = 60_000;
-const AD_SESSION_WARMUP_MS = 60_000;
-const sessionStartMs = performance.now();
 let lastAdEndMs = -Infinity;
 let adInFlight = false;
 function requestMidgameAd() {
 	if (!cgReady || !CG.ad || typeof CG.ad.requestAd !== 'function') return;
 	if (adInFlight) return;
 	const now = performance.now();
-	if (now - sessionStartMs < AD_SESSION_WARMUP_MS) return;
-	if (now - lastAdEndMs     < AD_MIN_INTERVAL_MS)  return;
+	if (now - lastAdEndMs < AD_MIN_INTERVAL_MS) return;
 	adInFlight = true;
 	// CrazyGames policy: the SDK must see gameplayStop before the midgame ad
 	// request. The game writes gameplay_active=false on the same frame, but it

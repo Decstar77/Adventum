@@ -217,28 +217,6 @@ game_restart :: proc(g: ^Game) {
 // Stylised gear icon for the pause-menu button — four cardinal teeth, a body
 // disc, and a darker hole. We don't have rotated quads, so the teeth sit on
 // the axes; that's enough to read as a gear at this size.
-// Fullscreen toggle icon — four L-shaped corner brackets pointing outward,
-// matching the universal "expand to fullscreen" glyph. We draw the same shape
-// regardless of current fullscreen state since the host doesn't tell us back
-// whether we're in fullscreen.
-draw_fullscreen_icon :: proc(p: ^Platform, cx, cy, s: f32, color: [4]f32) {
-	r := s * 0.5      // half-extent
-	t := s * 0.12     // bracket thickness
-	l := s * 0.28     // bracket arm length
-	// Top-left corner: horizontal bar + vertical bar meeting at (cx-r, cy-r).
-	p->draw_rect(cx - r,       cy - r,       l, t, color)
-	p->draw_rect(cx - r,       cy - r,       t, l, color)
-	// Top-right corner.
-	p->draw_rect(cx + r - l,   cy - r,       l, t, color)
-	p->draw_rect(cx + r - t,   cy - r,       t, l, color)
-	// Bottom-left corner.
-	p->draw_rect(cx - r,       cy + r - t,   l, t, color)
-	p->draw_rect(cx - r,       cy + r - l,   t, l, color)
-	// Bottom-right corner.
-	p->draw_rect(cx + r - l,   cy + r - t,   l, t, color)
-	p->draw_rect(cx + r - t,   cy + r - l,   t, l, color)
-}
-
 draw_gear_icon :: proc(p: ^Platform, cx, cy, s: f32, color: [4]f32) {
 	r := s * 0.5
 	tw := s * 0.20
@@ -541,19 +519,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		p->play_sound(.Button_Click)
 	}
 
-	// Fullscreen toggle sits immediately left of the gear at the same size.
-	// Shift+Enter is the keyboard equivalent; this button exists for players
-	// on touch / CrazyGames reviewers who don't know that shortcut.
-	fs_x := gear_x - GEAR_S - 8
-	fs_y := gear_y
-	mouse_in_fs := point_in_rect(p.mouse, fs_x, fs_y, GEAR_S, GEAR_S)
-	ui_track_hover(&g.ui, p, mouse_in_fs, ui_button_key(fs_x, fs_y))
-	if !paused && mouse_in_fs && p.mouse_left_pressed {
-		p->toggle_fullscreen()
-		p->play_sound(.Button_Click)
-	}
-
-	// Core ability buttons live directly under the gear: [Bomb (Q)] [EMP (E)].
+// Core ability buttons live directly under the gear: [Bomb (Q)] [EMP (E)].
 	// Wider than the gear so the cost lines and cooldown text fit; placed
 	// before the world hit-tests so clicks on them don't fall through to the
 	// hex grid underneath.
@@ -613,7 +579,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	// Place / remove via mouse on the world (suppressed when over the picker bar)
 	lmb_just := p.mouse_left_pressed
 	shift_held := p->is_key_down(.Left_Shift) || p->is_key_down(.Right_Shift)
-	if !paused && !mouse_in_picker && !mouse_in_panel && !mouse_in_gear && !mouse_in_fs && !mouse_in_abilities && !g.world.game_over && !g.world.victory {
+	if !paused && !mouse_in_picker && !mouse_in_panel && !mouse_in_gear && !mouse_in_abilities && !g.world.game_over && !g.world.victory {
 		if lmb_just && g.mode == .Target_Bomb {
 			// Drop the bomb at the hovered hex's pixel centre so the AoE
 			// reads as anchored to a tile rather than a cursor pixel.
@@ -699,7 +665,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 			}
 		}
 
-		if g.mode == .Default && !mouse_in_picker && !mouse_in_panel && !mouse_in_gear && !mouse_in_fs && !mouse_in_abilities && !paused {
+		if g.mode == .Default && !mouse_in_picker && !mouse_in_panel && !mouse_in_gear && !mouse_in_abilities && !paused {
 			if _, ok := g.world.tiles[hover]; ok {
 				draw_hex_outline(p, hover, 2.5, {1, 1, 1, 0.9})
 			}
@@ -1082,19 +1048,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		draw_gear_icon(p, gear_x + GEAR_S*0.5, gear_y + GEAR_S*0.5, GEAR_S * 0.7, {0.95, 0.95, 0.98, 1})
 	}
 
-	// Fullscreen button — same chrome as the gear, sits immediately to its
-	// left. Click handler already consumed at the top of the frame.
-	{
-		fs_hover := mouse_in_fs
-		fs_held  := fs_hover && p.mouse_left_down
-		bg := [4]f32{0.18, 0.20, 0.26, 0.85}
-		if fs_held       do bg = {0.10, 0.12, 0.16, 0.95}
-		else if fs_hover do bg = {0.26, 0.30, 0.40, 0.95}
-		p->draw_rect(fs_x, fs_y, GEAR_S, GEAR_S, bg)
-		draw_fullscreen_icon(p, fs_x + GEAR_S*0.5, fs_y + GEAR_S*0.5, GEAR_S * 0.55, {0.95, 0.95, 0.98, 1})
-	}
-
-	// Pause menu — modal overlay on top of everything. Gameplay input has
+// Pause menu — modal overlay on top of everything. Gameplay input has
 	// already been gated above via `paused`; here we only render and process
 	// the menu's own controls.
 	if g.paused {
