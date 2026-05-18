@@ -76,28 +76,23 @@ FINAL_WAVE_INDEX :: i32(12)  // 0-based: wave 13 is the finale.
 
 @(private="file")
 surge_composition :: proc(index: i32) -> (crawlers, brutes, spitters, swarmers, flyers, brute_bosses, spitter_bosses, flyer_bosses: i32) {
-	// `index` is 0-based (first surge => 0). Every wave includes at least one
-	// of each kind so the player actually sees the variety the game has — the
-	// previous gating ("brutes from wave 2, spitters from wave 2") meant
-	// players who died on wave 1 never saw them at all.
-
 	// Waves 10-13 (0-based 9..12) are themed finale waves with fixed
 	// compositions. They short-circuit the open-ended scaling formula below.
 	switch index {
 	case 9:
 		// Wave 10 — Melee theme: tanky Brute boss surrounded by Brutes and a
 		// crawler swarm. No ranged/air pressure.
-		return 30, 12, 0, 0, 0, 1, 0, 0
+		return 150, 75, 10, 20, 10, 1, 0, 0
 	case 10:
 		// Wave 11 — Ranged theme: Spitter boss + heavy Spitter line + Swarmers.
 		// A handful of Crawlers so the player can't fully wall off and forget.
-		return 6, 0, 20, 18, 0, 0, 1, 0
+		return 50, 20, 150, 100, 0, 0, 1, 0
 	case 11:
 		// Wave 12 — Air theme: Flyer boss + flock of Flyers. Pure air raid.
-		return 0, 0, 0, 0, 18, 0, 0, 1
+		return 50, 20, 20, 10, 50, 0, 0, 1
 	case 12:
 		// Wave 13 — Finale: all three bosses + a balanced mix of every kind.
-		return 20, 8, 10, 6, 8, 1, 1, 1
+		return 150, 100, 150, 100, 50, 1, 1, 1
 	}
 
 	crawlers = 8 + index * 2
