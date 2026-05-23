@@ -1066,8 +1066,14 @@ async function fetchWithProgress(url, report) {
 // on integrated GPUs and the visual difference past 2× is marginal.
 function resizeCanvases() {
 	const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
-	const w = Math.max(1, Math.round(window.innerWidth  * dpr));
-	const h = Math.max(1, Math.round(window.innerHeight * dpr));
+	// Read from the stage rather than the window: on mobile, #stage is inset
+	// from the viewport edges via env(safe-area-inset-*) + a touch-device
+	// margin (see index.html), so the curved-screen / home-button regions stay
+	// outside the canvases. The game lays out in canvas-pixel coords, so a
+	// smaller stage naturally pulls the whole UI into the safe rectangle.
+	const rect = bgStage.getBoundingClientRect();
+	const w = Math.max(1, Math.round(rect.width  * dpr));
+	const h = Math.max(1, Math.round(rect.height * dpr));
 	if (canvas.width  !== w) canvas.width  = w;
 	if (canvas.height !== h) canvas.height = h;
 	if (bgCanvas && (bgCanvas.width !== w || bgCanvas.height !== h)) {

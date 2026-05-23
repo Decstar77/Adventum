@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Hex Defence</title>
 <style>
   /* SUSE Mono is the same font the win32 build bakes into its glyph atlas
@@ -18,10 +18,33 @@
   }
   html, body { margin: 0; padding: 0; background: #050507; height: 100%; overflow: hidden; }
   body { font-family: "SUSE Mono", monospace; color: #aab; }
-  /* Stage fills the iframe. Both canvases use the same pixel dimensions,
-     resized to match the viewport on load/resize so the WebGL background
-     and 2D shapes/text stay aligned. */
-  #stage  { position: fixed; inset: 0; width: 100vw; height: 100vh; }
+  /* Stage holds both canvases. On desktop it fills the iframe; on mobile we
+     pull it in from the viewport edges so the game's UI (resource counters,
+     buttons) doesn't get eaten by curved-screen rounding, notches, or the
+     Android home/back gesture bars. The canvases inside use inset:0 so they
+     resize with the stage, and host.js reads the stage's actual size to set
+     the wasm's logical screen dimensions — effectively zooming the whole
+     scene into the safe rectangle. The buffer regions show the body bg. */
+  #stage  {
+    position: fixed;
+    top:    env(safe-area-inset-top);
+    right:  env(safe-area-inset-right);
+    bottom: env(safe-area-inset-bottom);
+    left:   env(safe-area-inset-left);
+  }
+  /* Touch devices: even when env() reports zero (most Android browsers), keep
+     a chunky margin so the curved corners and nav gesture area stay clear. */
+  @media (pointer: coarse) {
+    #stage {
+      top:    max(env(safe-area-inset-top),    24px);
+      right:  max(env(safe-area-inset-right),  24px);
+      bottom: max(env(safe-area-inset-bottom), 24px);
+      left:   max(env(safe-area-inset-left),   24px);
+    }
+  }
+  /* Fullscreen element ignores top/right/bottom/left positioning — restore
+     full coverage so the browser composites the whole screen. */
+  #stage:fullscreen { top: 0; right: 0; bottom: 0; left: 0; }
   /* touch-action: none stops the browser from interpreting drags/pinches as
      page scroll or pinch-zoom so host.js can consume them as camera pan/zoom. */
   #stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: default; touch-action: none; -webkit-user-select: none; user-select: none; }
