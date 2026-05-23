@@ -39,6 +39,15 @@ Game :: struct {
 	best_time:        f32,
 	run_result_saved: bool, // one-shot guard so we only save once per run
 
+	// First-run tutorial. `tutorial_active` is true while the prompt card is
+	// visible; `tutorial_step` advances as the player completes the asked
+	// action (build Farm, build Generator, power a Turret). Once finished the
+	// host persists `tutorial_done=1` so it never shows again — both the
+	// CrazyGames cloud-save path and the localStorage fallback are handled by
+	// save_f32 / load_f32 in the host layer.
+	tutorial_active: bool,
+	tutorial_step:   i32,
+
 	// Right-mouse pan: track the mouse position from last frame so we can
 	// turn movement-while-RMB-held into camera panning. `rmb_drag_total` is
 	// the accumulated pixel distance since RMB went down — if it stays below
@@ -174,6 +183,19 @@ button_with_scrap_cost :: proc(ui: ^UI, p: ^Platform, label: string, amount: i32
 TICK_HZ :: 10.0
 TICK_DT :: f32(1.0 / TICK_HZ)
 
+// While the first-run tutorial is active, only the tile kind for the current
+// step is buildable; every other picker slot reads as locked and hotkeys for
+// those slots are ignored. Returns the allowed kind plus an "is gated" flag
+// so callers can short-circuit when the tutorial isn't running.
+tutorial_allowed_kind :: proc(g: ^Game) -> (kind: Tile_Kind, gated: bool) {
+	if !g.tutorial_active do return .Farm, false
+	switch g.tutorial_step {
+	case 0: return .Farm,      true
+	case 1: return .Generator, true
+	case:   return .Turret,    true
+	}
+}
+
 @(private="file")
 HOTKEYS := [BUILDABLE_COUNT]Key{
 	.Num1, .Num2, .Num3, .Num4, .Num5, .Num6, .Num7,
@@ -187,6 +209,13 @@ game_init :: proc(g: ^Game, p: ^Platform) {
 	if g.volume < 0 do g.volume = 0
 	if g.volume > 1 do g.volume = 1
 	g.best_time = p.load_f32 != nil ? p->load_f32("best_time", 0) : 0
+	// Show the tutorial only on first run. Host save_f32 writes 1.0 once the
+	// player completes (or skips) it; subsequent loads read >= 0.5 and we
+	// leave it dismissed. Float comparison with a 0.5 threshold keeps the
+	// f32 round-trip safe.
+	tutorial_done := p.load_f32 != nil ? p->load_f32("tutorial_done", 0) : 1
+	g.tutorial_active = tutorial_done < 0.5
+	g.tutorial_step   = 0
 	world_init(&g.world)
 	// Initial energization pass so the Core's energized flag is correct from frame 0.
 	world_tick(&g.world, 0)
@@ -212,6 +241,10 @@ game_restart :: proc(g: ^Game) {
 	g.paused = false
 	g.show_controls = false
 	g.run_result_saved = false
+	// Restart wipes the world's tiles, so any tutorial progress measured from
+	// world state goes with them. Re-seed the step to 0 if the tutorial is
+	// still active so the prompt matches what's on the board.
+	if g.tutorial_active do g.tutorial_step = 0
 }
 
 // Stylised gear icon for the pause-menu button — four cardinal teeth, a body
@@ -356,9 +389,12 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	}
 
 	if !paused {
+		tut_kind, tut_gated := tutorial_allowed_kind(g)
 		for k, i in HOTKEYS {
 			if p->is_key_just_pressed(k) {
-				g.selected_kind = Tile_Kind(i)
+				kind := Tile_Kind(i)
+				if tut_gated && kind != tut_kind do continue
+				g.selected_kind = kind
 				g.mode = .Place
 				g.has_selection = false
 			}
@@ -691,6 +727,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	bh := picker_h - picker_pad * 2
 	mortar_locked := !mortar_unlocked(&g.world)
 	flak_locked   := !flak_unlocked(&g.world)
+	tut_kind, tut_gated := tutorial_allowed_kind(g)
 	for i in 0 ..< BUILDABLE_COUNT {
 		kind := Tile_Kind(i)
 		cost := tile_cost(kind)
@@ -698,8 +735,11 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		affordable := g.world.food >= cost
 		// Mortar / Flak read as locked until the Core hits the required tier —
 		// clicks are silently consumed so the player can't enter Place mode and
-		// stare at red placement outlines wondering why nothing drops.
-		locked := (kind == .Mortar && mortar_locked) || (kind == .Flak && flak_locked)
+		// stare at red placement outlines wondering why nothing drops. The
+		// tutorial adds a stricter gate on top: while it's running, only the
+		// kind for the current step is selectable.
+		tutorial_locked := tut_gated && kind != tut_kind
+		locked := (kind == .Mortar && mortar_locked) || (kind == .Flak && flak_locked) || tutorial_locked
 		clicked := ui_button(&g.ui, p, "", x, by, bw, bh)
 		if clicked && !locked {
 			g.selected_kind = kind
@@ -738,6 +778,120 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 			p->draw_line(x,        by,        x,      by + bh,   2, stroke)
 			p->draw_line(x + bw,   by,        x + bw, by + bh,   2, stroke)
 		}
+	}
+
+	// First-run tutorial. Advances the step when the player has actually done
+	// the asked-for action — counted from world state, not from button clicks,
+	// so a stray right-click that cancels mid-place doesn't skip a step. When
+	// the final step completes (a turret powered by a generator) we save the
+	// "tutorial_done" flag through the CrazyGames SDK persistence path (with
+	// localStorage fallback — see host.js storageSet) so it's gone for good.
+	TUTORIAL_FARMS_REQUIRED :: 3
+	if g.tutorial_active {
+		prev_step := g.tutorial_step
+		switch g.tutorial_step {
+		case 0:
+			if world_count_kind(&g.world, .Farm) >= TUTORIAL_FARMS_REQUIRED do g.tutorial_step = 1
+		case 1:
+			if world_count_kind(&g.world, .Generator) >= 1 do g.tutorial_step = 2
+		case 2:
+			// Energized — the turret has to be inside a Generator's radius, which
+			// is the actual lesson here. A turret dropped off in the corner won't
+			// complete the step, and the player learns the powering rule.
+			for _, tile in g.world.tiles {
+				if tile.kind == .Turret && tile.energized {
+					g.tutorial_step = 3
+					break
+				}
+			}
+		}
+		if g.tutorial_step >= 3 {
+			g.tutorial_active = false
+			if p.save_f32 != nil do p->save_f32("tutorial_done", 1)
+		} else if g.tutorial_step != prev_step {
+			// Auto-swap to the next step's kind. Otherwise the player would
+			// still have e.g. Farm selected after the Farm step ends, and the
+			// first click on the now-locked-out picker slot wouldn't do
+			// anything since the picker hit-test rejects locked kinds.
+			new_kind, _ := tutorial_allowed_kind(g)
+			g.selected_kind = new_kind
+		}
+	}
+
+	// Tutorial card. Sits above the picker bar so it doesn't fight the timer
+	// at the top, and the highlighted picker slot it points at is right
+	// underneath the card. Drawn after the picker so the slot-highlight ring
+	// reads cleanly through the dim card background.
+	if g.tutorial_active {
+		header: string
+		// Two-line body. The font renderer can't wrap, so we hand-split the
+		// copy at a natural break — short enough to fit a 720 px card with
+		// padding on either side at the .Small font.
+		body1: string
+		body2: string
+		highlight_kind := Tile_Kind.Farm
+		switch g.tutorial_step {
+		case 0:
+			farms := world_count_kind(&g.world, .Farm)
+			header = fmt.tprintf("Tutorial  -  Step 1 of 3   (Farms %d / %d)", farms, TUTORIAL_FARMS_REQUIRED)
+			body1  = fmt.tprintf("Build %d Farms to generate food.", TUTORIAL_FARMS_REQUIRED)
+			body2  = "Pick FARM below, then click an empty hex next to your Core."
+			highlight_kind = .Farm
+		case 1:
+			header = "Tutorial  -  Step 2 of 3"
+			body1  = "Build a Generator."
+			body2  = "It powers nearby Turrets, Mortars, and Flak cannons."
+			highlight_kind = .Generator
+		case:
+			header = "Tutorial  -  Step 3 of 3"
+			body1  = "Place a Turret next to your Generator."
+			body2  = "When it's in range the Turret lights up and starts firing."
+			highlight_kind = .Turret
+		}
+
+		TUT_W := f32(720)
+		TUT_H := f32(124)
+		tut_x := (sw - TUT_W) * 0.5
+		tut_y := picker_y - TUT_H - 12
+
+		// Subtle drop shadow + panel.
+		p->draw_rect(tut_x + 2, tut_y + 3, TUT_W, TUT_H, {0, 0, 0, 0.35})
+		p->draw_rect(tut_x, tut_y, TUT_W, TUT_H, {0.10, 0.11, 0.14, 0.95})
+		p->draw_line(tut_x,       tut_y,       tut_x + TUT_W, tut_y,       1, {1.00, 0.85, 0.45, 0.55})
+		p->draw_line(tut_x,       tut_y + TUT_H, tut_x + TUT_W, tut_y + TUT_H, 1, {0, 0, 0, 0.40})
+
+		hw := p->text_measure(header, .Small)
+		p->draw_text(tut_x + (TUT_W - hw) * 0.5, tut_y + 10 + font_small, header, {1.00, 0.88, 0.55, 1}, .Small)
+		b1w := p->text_measure(body1, .Small)
+		b2w := p->text_measure(body2, .Small)
+		p->draw_text(tut_x + (TUT_W - b1w) * 0.5, tut_y + 10 + font_small * 2 + 14, body1, {0.95, 0.95, 0.98, 1}, .Small)
+		p->draw_text(tut_x + (TUT_W - b2w) * 0.5, tut_y + 10 + font_small * 3 + 20, body2, {0.95, 0.95, 0.98, 1}, .Small)
+
+		// Skip button bottom-right inside the card. Closes the tutorial and
+		// persists the flag so it never returns. Hover/edge-detect goes through
+		// the same ui_button helper as everything else.
+		skip_w := f32(80)
+		skip_h := f32(24)
+		skip_x := tut_x + TUT_W - skip_w - 10
+		skip_y := tut_y + TUT_H - skip_h - 8
+		if ui_button(&g.ui, p, "Skip", skip_x, skip_y, skip_w, skip_h) {
+			g.tutorial_active = false
+			if p.save_f32 != nil do p->save_f32("tutorial_done", 1)
+		}
+
+		// Yellow highlight ring around the picker slot the player should click.
+		// The picker slot rect is the same `(x, by, bw, bh)` rectangle used in
+		// the picker loop above — recompute it for the active kind here.
+		slot_idx := i32(highlight_kind)
+		hx := picker_x + picker_pad + f32(slot_idx) * (bw + 8)
+		hy := picker_y + picker_pad
+		// Pulsing alpha so it catches the eye without being garish.
+		pulse := 0.55 + 0.30 * math.sin(p.time * 4)
+		ring  := [4]f32{1.00, 0.85, 0.45, pulse}
+		p->draw_line(hx,        hy,        hx + bw,   hy,        3, ring)
+		p->draw_line(hx,        hy + bh,   hx + bw,   hy + bh,   3, ring)
+		p->draw_line(hx,        hy,        hx,        hy + bh,   3, ring)
+		p->draw_line(hx + bw,   hy,        hx + bw,   hy + bh,   3, ring)
 	}
 
 	// Top-left HUD — icon + value per row.
