@@ -1,5 +1,7 @@
 package game
 
+import "../common"
+
 import "core:math"
 
 Tile_Kind :: enum {
@@ -140,8 +142,8 @@ mortar_splash :: proc(tier: i32) -> f32 {
 }
 
 World :: struct {
-	tiles:         map[Hex_Coord]Tile,
-	core:          Hex_Coord,
+	tiles:         map[common.Hex_Coord]Tile,
+	core:          common.Hex_Coord,
 	food:          f32,
 	scrap:         i32,
 	enemies:           [dynamic]Enemy,
@@ -166,10 +168,10 @@ World :: struct {
 	core_invincible: bool,
 	waves:         Wave_State,
 
-	// Sound effects queued by simulation code (turrets firing, enemies dying,
+	// common.Sound effects queued by simulation code (turrets firing, enemies dying,
 	// tiles being destroyed). `game_update_and_render` drains this each frame
-	// and forwards the events to `Platform.play_sound` / `play_sound_at`. A
-	// queued entry without `has_pos` plays unpositioned (UI-like); with one,
+	// and forwards the events to `common.Platform.play_sound` / `play_sound_at`. A
+	// queued entry without `has_pos` plays unpositioned (common.UI-like); with one,
 	// the host attenuates and pans by distance from the current listener.
 	sound_queue:   [dynamic]Queued_Sound,
 
@@ -205,18 +207,18 @@ EMP_COOLDOWN     :: f32(40)
 EMP_DURATION     :: f32(5)
 
 Queued_Sound :: struct {
-	kind:    Sound,
+	kind:    common.Sound,
 	pos:     [2]f32,
 	has_pos: bool,
 }
 
-world_queue_sound :: proc(w: ^World, s: Sound) {
+world_queue_sound :: proc(w: ^World, s: common.Sound) {
 	append(&w.sound_queue, Queued_Sound{kind = s})
 }
 
 // Positional variant — the per-frame drain forwards (pos.x, pos.y) to the host
 // so the underlying audio engine pans/attenuates by distance to the listener.
-world_queue_sound_at :: proc(w: ^World, s: Sound, pos: [2]f32) {
+world_queue_sound_at :: proc(w: ^World, s: common.Sound, pos: [2]f32) {
 	append(&w.sound_queue, Queued_Sound{kind = s, pos = pos, has_pos = true})
 }
 
@@ -258,11 +260,11 @@ tile_consumes_energy :: proc(kind: Tile_Kind) -> bool {
 	return kind == .Turret || kind == .Mortar || kind == .Flak
 }
 
-world_in_build_range :: proc(w: ^World, c: Hex_Coord) -> bool {
-	if hex_distance(c, w.core) <= BUILD_RANGE do return true
+world_in_build_range :: proc(w: ^World, c: common.Hex_Coord) -> bool {
+	if common.hex_distance(c, w.core) <= BUILD_RANGE do return true
 	for coord, tile in w.tiles {
 		if tile.kind != .Relay do continue
-		if hex_distance(c, coord) <= relay_build_radius(tile.tier) do return true
+		if common.hex_distance(c, coord) <= relay_build_radius(tile.tier) do return true
 	}
 	return false
 }
@@ -285,7 +287,7 @@ flak_unlocked :: proc(w: ^World) -> bool {
 	return core.tier >= FLAK_CORE_TIER_REQ
 }
 
-world_can_place :: proc(w: ^World, c: Hex_Coord, kind: Tile_Kind) -> bool {
+world_can_place :: proc(w: ^World, c: common.Hex_Coord, kind: Tile_Kind) -> bool {
 	if kind == .Core do return false
 	if c in w.tiles do return false
 	if w.food < tile_cost(kind) do return false
@@ -294,7 +296,7 @@ world_can_place :: proc(w: ^World, c: Hex_Coord, kind: Tile_Kind) -> bool {
 	return world_in_build_range(w, c)
 }
 
-world_place :: proc(w: ^World, c: Hex_Coord, kind: Tile_Kind) -> bool {
+world_place :: proc(w: ^World, c: common.Hex_Coord, kind: Tile_Kind) -> bool {
 	if !world_can_place(w, c, kind) do return false
 	w.food -= tile_cost(kind)
 	tile := Tile{kind = kind, tier = 1, hp = tile_max_hp(kind, 1)}
@@ -303,13 +305,13 @@ world_place :: proc(w: ^World, c: Hex_Coord, kind: Tile_Kind) -> bool {
 	}
 	w.tiles[c] = tile
 	w.path_dirty = true
-	world_queue_sound_at(w, .Place_Building, hex_to_pixel(c))
+	world_queue_sound_at(w, .Place_Building, common.hex_to_pixel(c))
 	return true
 }
 
 // Bump a tile up one tier. Costs food, scales hp by the new max-hp ratio so
 // upgrades feel like a buff rather than a free heal.
-world_can_upgrade :: proc(w: ^World, c: Hex_Coord) -> bool {
+world_can_upgrade :: proc(w: ^World, c: common.Hex_Coord) -> bool {
 	t, ok := w.tiles[c]
 	if !ok do return false
 	if !tile_is_upgradeable(t.kind) do return false
@@ -318,7 +320,7 @@ world_can_upgrade :: proc(w: ^World, c: Hex_Coord) -> bool {
 	return true
 }
 
-world_upgrade :: proc(w: ^World, c: Hex_Coord) -> bool {
+world_upgrade :: proc(w: ^World, c: common.Hex_Coord) -> bool {
 	if !world_can_upgrade(w, c) do return false
 	t := w.tiles[c]
 	cost := tile_upgrade_cost(t.kind, t.tier)
@@ -334,7 +336,7 @@ world_upgrade :: proc(w: ^World, c: Hex_Coord) -> bool {
 	return true
 }
 
-world_remove :: proc(w: ^World, c: Hex_Coord) -> bool {
+world_remove :: proc(w: ^World, c: common.Hex_Coord) -> bool {
 	t, ok := w.tiles[c]
 	if !ok do return false
 	if t.kind == .Core do return false
@@ -346,7 +348,7 @@ world_remove :: proc(w: ^World, c: Hex_Coord) -> bool {
 // Repair pricing. Returns (missing_hp, scrap_cost). Round-up on scrap so a
 // 1-HP nudge still costs the player something — otherwise a building at
 // max-hp-minus-1 would be free to top up indefinitely.
-tile_repair_quote :: proc(w: ^World, c: Hex_Coord) -> (missing: f32, scrap_cost: i32, ok: bool) {
+tile_repair_quote :: proc(w: ^World, c: common.Hex_Coord) -> (missing: f32, scrap_cost: i32, ok: bool) {
 	t, present := w.tiles[c]
 	if !present do return 0, 0, false
 	max_hp := tile_max_hp(t.kind, t.tier)
@@ -358,13 +360,13 @@ tile_repair_quote :: proc(w: ^World, c: Hex_Coord) -> (missing: f32, scrap_cost:
 	return missing, scrap_cost, true
 }
 
-world_can_repair :: proc(w: ^World, c: Hex_Coord) -> bool {
+world_can_repair :: proc(w: ^World, c: common.Hex_Coord) -> bool {
 	_, cost, ok := tile_repair_quote(w, c)
 	if !ok do return false
 	return w.scrap >= cost
 }
 
-world_repair :: proc(w: ^World, c: Hex_Coord) -> bool {
+world_repair :: proc(w: ^World, c: common.Hex_Coord) -> bool {
 	missing, cost, ok := tile_repair_quote(w, c)
 	if !ok do return false
 	if w.scrap < cost do return false
@@ -421,7 +423,7 @@ world_use_emp :: proc(w: ^World) -> bool {
 	return true
 }
 
-world_sell :: proc(w: ^World, c: Hex_Coord) -> bool {
+world_sell :: proc(w: ^World, c: common.Hex_Coord) -> bool {
 	t, ok := w.tiles[c]
 	if !ok do return false
 	if t.kind == .Core do return false
@@ -510,7 +512,7 @@ world_recompute_energy :: proc(w: ^World) {
 		for other_coord, other in w.tiles {
 			if !tile_consumes_energy(other.kind) do continue
 			if other.energized do continue
-			if hex_distance(coord, other_coord) > radius do continue
+			if common.hex_distance(coord, other_coord) > radius do continue
 			ot := other
 			ot.energized = true
 			w.tiles[other_coord] = ot
@@ -580,7 +582,7 @@ tile_color :: proc(kind: Tile_Kind) -> (fill, stroke: [4]f32) {
 	return {1, 1, 1, 1}, {0, 0, 0, 1}
 }
 
-draw_tile_icon :: proc(p: ^Platform, cx, cy: f32, kind: Tile_Kind, alpha: f32, aim_angle: f32 = -math.PI * 0.5, tier: i32 = 1) {
+draw_tile_icon :: proc(p: ^common.Platform, cx, cy: f32, kind: Tile_Kind, alpha: f32, aim_angle: f32 = -math.PI * 0.5, tier: i32 = 1) {
 	_, stroke := tile_color(kind)
 	stroke.a *= alpha
 
@@ -719,7 +721,7 @@ draw_tile_icon :: proc(p: ^Platform, cx, cy: f32, kind: Tile_Kind, alpha: f32, a
 		ring_outer := [4]f32{0.365, 0.792, 0.647, alpha}
 		ring_inner := [4]f32{0.114, 0.620, 0.459, alpha}
 		fill, _ := tile_color(kind)
-		draw_ring :: proc(p: ^Platform, x, y: f32, c_outer, c_fill, c_inner: [4]f32) {
+		draw_ring :: proc(p: ^common.Platform, x, y: f32, c_outer, c_fill, c_inner: [4]f32) {
 			p->draw_circle(x, y, 10, c_outer)
 			p->draw_circle(x, y,  7, c_fill)
 			p->draw_circle(x, y,  4, c_inner)
@@ -739,8 +741,8 @@ draw_tile_icon :: proc(p: ^Platform, cx, cy: f32, kind: Tile_Kind, alpha: f32, a
 }
 
 @(private="file")
-draw_tile_marker :: proc(p: ^Platform, c: Hex_Coord, tile: Tile, alpha: f32) {
-	center := hex_to_pixel(c)
+draw_tile_marker :: proc(p: ^common.Platform, c: common.Hex_Coord, tile: Tile, alpha: f32) {
+	center := common.hex_to_pixel(c)
 	draw_tile_icon(p, center.x, center.y, tile.kind, alpha, tile.aim_angle, tile.tier)
 
 	// Tier-3 turret: back gun mirrored across the body. Drawn here (not in
@@ -756,7 +758,7 @@ draw_tile_marker :: proc(p: ^Platform, c: Hex_Coord, tile: Tile, alpha: f32) {
 }
 
 // Small HUD icons drawn within an `s` × `s` box anchored at top-left (x, y).
-draw_food_icon :: proc(p: ^Platform, x, y, s: f32) {
+draw_food_icon :: proc(p: ^common.Platform, x, y, s: f32) {
 	dark  := [4]f32{0.231, 0.427, 0.067, 1}
 	light := [4]f32{0.388, 0.600, 0.133, 1}
 	q := s * 0.45
@@ -767,14 +769,14 @@ draw_food_icon :: proc(p: ^Platform, x, y, s: f32) {
 	p->draw_rect(x + q + gap,   y + q + gap,   q, q, light)
 }
 
-draw_scrap_icon :: proc(p: ^Platform, x, y, s: f32) {
+draw_scrap_icon :: proc(p: ^common.Platform, x, y, s: f32) {
 	mid    := [4]f32{0.533, 0.529, 0.502, 1}
 	stroke := [4]f32{0.373, 0.369, 0.353, 1}
 	p->draw_rect(x + s * 0.10, y + s * 0.20, s * 0.80, s * 0.60, mid)
 	p->draw_line(x + s * 0.10, y + s * 0.50, x + s * 0.90, y + s * 0.50, 2, stroke)
 }
 
-draw_core_icon :: proc(p: ^Platform, x, y, s: f32) {
+draw_core_icon :: proc(p: ^common.Platform, x, y, s: f32) {
 	stroke := [4]f32{0.325, 0.290, 0.718, 1}
 	fill   := [4]f32{0.733, 0.729, 0.996, 1}
 	cx := x + s * 0.5
@@ -784,7 +786,7 @@ draw_core_icon :: proc(p: ^Platform, x, y, s: f32) {
 	p->draw_circle(cx, cy, r * 0.65, fill)
 }
 
-draw_enemy_icon :: proc(p: ^Platform, x, y, s: f32) {
+draw_enemy_icon :: proc(p: ^common.Platform, x, y, s: f32) {
 	hot   := [4]f32{0.886, 0.294, 0.290, 1}
 	dark  := [4]f32{0.639, 0.176, 0.176, 1}
 	cx := x + s * 0.5
@@ -793,7 +795,7 @@ draw_enemy_icon :: proc(p: ^Platform, x, y, s: f32) {
 	p->draw_circle(cx, cy, s * 0.30, hot)
 }
 
-world_render :: proc(w: ^World, p: ^Platform) {
+world_render :: proc(w: ^World, p: ^common.Platform) {
 	for coord, tile in w.tiles {
 		_, stroke := tile_color(tile.kind)
 		alpha := f32(1)
@@ -801,32 +803,32 @@ world_render :: proc(w: ^World, p: ^Platform) {
 			alpha = 0.45
 		}
 		stroke.a *= alpha
-		draw_hex_outline(p, coord, 2, stroke)
+		common.draw_hex_outline(p, coord, 2, stroke)
 		draw_tile_marker(p, coord, tile, alpha)
 
 		max_hp := tile_max_hp(tile.kind, tile.tier)
-		center := hex_to_pixel(coord)
-		draw_health_bar(p, center.x, center.y - HEX_APOTHEM + 6, 30, tile.hp, max_hp)
+		center := common.hex_to_pixel(coord)
+		draw_health_bar(p, center.x, center.y - common.HEX_APOTHEM + 6, 30, tile.hp, max_hp)
 	}
 }
 
 @(private="file")
-render_buildable_area :: proc(w: ^World, p: ^Platform) {
+render_buildable_area :: proc(w: ^World, p: ^common.Platform) {
 	blue := [4]f32{0.36, 0.62, 0.95, 0.25}
-	visit :: proc(w: ^World, p: ^Platform, c: Hex_Coord, radius: i32, color: [4]f32, seen: ^map[Hex_Coord]bool) {
+	visit :: proc(w: ^World, p: ^common.Platform, c: common.Hex_Coord, radius: i32, color: [4]f32, seen: ^map[common.Hex_Coord]bool) {
 		for q in -radius ..= radius {
 			for r in -radius ..= radius {
-				n := Hex_Coord{c.x + q, c.y + r}
-				if hex_distance(n, c) > radius do continue
+				n := common.Hex_Coord{c.x + q, c.y + r}
+				if common.hex_distance(n, c) > radius do continue
 				if n in seen^ do continue
 				if n in w.tiles do continue
 				seen^[n] = true
-				draw_hex_outline(p, n, 1.5, color)
+				common.draw_hex_outline(p, n, 1.5, color)
 			}
 		}
 	}
 
-	seen: map[Hex_Coord]bool
+	seen: map[common.Hex_Coord]bool
 	defer delete(seen)
 	visit(w, p, w.core, BUILD_RANGE, blue, &seen)
 	for coord, tile in w.tiles {
@@ -839,7 +841,7 @@ render_buildable_area :: proc(w: ^World, p: ^Platform) {
 // Halo the hexes a Generator powers or a Relay extends build range over,
 // so the player can see at a glance what a selected support tile actually
 // covers. Renders nothing for kinds that have no area of influence.
-world_render_selection_influence :: proc(w: ^World, p: ^Platform, c: Hex_Coord) {
+world_render_selection_influence :: proc(w: ^World, p: ^common.Platform, c: common.Hex_Coord) {
 	tile, ok := w.tiles[c]
 	if !ok do return
 
@@ -861,15 +863,15 @@ world_render_selection_influence :: proc(w: ^World, p: ^Platform, c: Hex_Coord) 
 
 	for q in -radius ..= radius {
 		for r in -radius ..= radius {
-			n := Hex_Coord{c.x + q, c.y + r}
-			if hex_distance(n, c) > radius do continue
+			n := common.Hex_Coord{c.x + q, c.y + r}
+			if common.hex_distance(n, c) > radius do continue
 			if n == c do continue
-			draw_hex_outline(p, n, 1.5, color)
+			common.draw_hex_outline(p, n, 1.5, color)
 		}
 	}
 }
 
-world_render_hover :: proc(w: ^World, p: ^Platform, hover: Hex_Coord, center: [2]f32, placing: bool, selected: Tile_Kind) {
+world_render_hover :: proc(w: ^World, p: ^common.Platform, hover: common.Hex_Coord, center: [2]f32, placing: bool, selected: Tile_Kind) {
 	if !placing {
 		return
 	}
@@ -885,5 +887,5 @@ world_render_hover :: proc(w: ^World, p: ^Platform, hover: Hex_Coord, center: [2
 	case can:      main_color = {0.30, 0.85, 0.45, 0.85}
 	case:          main_color = {0.85, 0.30, 0.30, 0.55}
 	}
-	draw_hex_outline_at(p, center, occupied ? 1.5 : 2.5, main_color)
+	common.draw_hex_outline_at(p, center, occupied ? 1.5 : 2.5, main_color)
 }

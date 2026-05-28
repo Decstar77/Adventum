@@ -1,4 +1,4 @@
-package game
+package common
 
 // Platform — the only seam between the game and the host (win32, web, ...).
 //

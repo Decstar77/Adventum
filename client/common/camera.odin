@@ -1,4 +1,4 @@
-package game
+package common
 
 Camera :: struct {
 	pos:  [2]f32,

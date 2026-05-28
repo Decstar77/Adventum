@@ -1,5 +1,7 @@
 package game
 
+import "../common"
+
 import "core:math"
 import "core:math/rand"
 
@@ -111,7 +113,7 @@ turrets_fire :: proc(w: ^World, dt: f32) {
 		if tile.kind != .Turret do continue
 		t := tile
 
-		origin := hex_to_pixel(coord)
+		origin := common.hex_to_pixel(coord)
 		idx := nearest_enemy_in_range(w, origin, TURRET_RANGE_PIXELS, skip_flyers = true)
 
 		// Track the nearest in-range enemy with a smooth rotation. With no
@@ -255,7 +257,7 @@ mortars_fire :: proc(w: ^World, dt: f32) {
 		if tile.kind != .Mortar do continue
 		t := tile
 
-		origin := hex_to_pixel(coord)
+		origin := common.hex_to_pixel(coord)
 		idx := nearest_enemy_in_range(w, origin, MORTAR_RANGE_PIXELS)
 
 		target_angle := t.aim_angle
@@ -348,7 +350,7 @@ flaks_fire :: proc(w: ^World, dt: f32) {
 		if tile.kind != .Flak do continue
 		t := tile
 
-		origin := hex_to_pixel(coord)
+		origin := common.hex_to_pixel(coord)
 		idx := nearest_flyer_in_range(w, origin, FLAK_RANGE_PIXELS)
 
 		target_angle := t.aim_angle
@@ -416,7 +418,7 @@ flaks_fire :: proc(w: ^World, dt: f32) {
 	}
 }
 
-projectiles_render :: proc(w: ^World, p: ^Platform) {
+projectiles_render :: proc(w: ^World, p: ^common.Platform) {
 	red    := [4]f32{0.886, 0.294, 0.290, 1}
 	yellow := [4]f32{1.000, 0.860, 0.220, 1}
 	for proj in w.projectiles {

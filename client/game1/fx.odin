@@ -1,5 +1,7 @@
 package game
 
+import "../common"
+
 import "core:math"
 import "core:math/rand"
 
@@ -401,7 +403,7 @@ particles_update :: proc(w: ^World, dt: f32) {
 	}
 }
 
-particles_render :: proc(w: ^World, plat: ^Platform) {
+particles_render :: proc(w: ^World, plat: ^common.Platform) {
 	for p in w.particles {
 		t := p.life / p.max_life            // 1 -> 0 over lifetime
 		r := p.r1 + (p.r0 - p.r1) * t

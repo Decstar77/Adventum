@@ -6,7 +6,8 @@ import "core:time"
 import "vendor:glfw"
 import win "core:sys/windows"
 
-import "../game"
+import "../common"
+import game "../game1"
 
 // Win32/GLFW/Vulkan host. Owns the window, the Vulkan renderer, the input
 // snapshot, and a Platform of function pointers it hands to the game each
@@ -20,8 +21,8 @@ App :: struct {
 
 	// Input snapshot built up by GLFW callbacks; sampled into Platform fields
 	// once per frame.
-	keys_down:        [game.KEY_COUNT]bool,
-	keys_was_down:    [game.KEY_COUNT]bool,
+	keys_down:        [common.KEY_COUNT]bool,
+	keys_was_down:    [common.KEY_COUNT]bool,
 	scroll_accum:     f64,
 	mouse:            [2]f32,
 	mouse_left_down,  mouse_left_was_down:  bool,
@@ -87,7 +88,7 @@ main :: proc() {
 
 	// Build the Platform once; per-frame state is refreshed at the top of the
 	// loop, fn pointers stay constant.
-	platform := game.Platform{
+	platform := common.Platform{
 		user_data           = &app,
 		is_key_down         = plat_is_key_down,
 		is_key_just_pressed = plat_is_key_just_pressed,
@@ -220,7 +221,7 @@ scroll_cb :: proc "c" (window: glfw.WindowHandle, xoff, yoff: f64) {
 }
 
 @(private="file")
-glfw_key_to_game :: proc "contextless" (k: i32) -> game.Key {
+glfw_key_to_game :: proc "contextless" (k: i32) -> common.Key {
 	switch k {
 	case glfw.KEY_W:           return .W
 	case glfw.KEY_A:           return .A
@@ -256,12 +257,12 @@ glfw_key_to_game :: proc "contextless" (k: i32) -> game.Key {
 // via the user_data pointer set up at init.
 
 @(private="file")
-app_of :: #force_inline proc "contextless" (p: ^game.Platform) -> ^App {
+app_of :: #force_inline proc "contextless" (p: ^common.Platform) -> ^App {
 	return cast(^App)p.user_data
 }
 
 @(private="file")
-to_native_font :: #force_inline proc "contextless" (f: game.Font_Size) -> Font_Size {
+to_native_font :: #force_inline proc "contextless" (f: common.Font_Size) -> Font_Size {
 	switch f {
 	case .Small: return .Small
 	case .Large: return .Large
@@ -270,83 +271,83 @@ to_native_font :: #force_inline proc "contextless" (f: game.Font_Size) -> Font_S
 }
 
 @(private="file")
-plat_is_key_down :: proc "contextless" (p: ^game.Platform, key: game.Key) -> bool {
+plat_is_key_down :: proc "contextless" (p: ^common.Platform, key: common.Key) -> bool {
 	a := app_of(p)
 	idx := int(key)
-	if idx < 0 || idx >= game.KEY_COUNT do return false
+	if idx < 0 || idx >= common.KEY_COUNT do return false
 	return a.keys_down[idx]
 }
 
 @(private="file")
-plat_is_key_just_pressed :: proc "contextless" (p: ^game.Platform, key: game.Key) -> bool {
+plat_is_key_just_pressed :: proc "contextless" (p: ^common.Platform, key: common.Key) -> bool {
 	a := app_of(p)
 	idx := int(key)
-	if idx < 0 || idx >= game.KEY_COUNT do return false
+	if idx < 0 || idx >= common.KEY_COUNT do return false
 	return a.keys_down[idx] && !a.keys_was_down[idx]
 }
 
 @(private="file")
-plat_draw_rect :: proc(p: ^game.Platform, x, y, w, h: f32, color: [4]f32) {
+plat_draw_rect :: proc(p: ^common.Platform, x, y, w, h: f32, color: [4]f32) {
 	gfx_push_rect(&app_of(p).graphics, x, y, w, h, color)
 }
 
 @(private="file")
-plat_draw_circle :: proc(p: ^game.Platform, cx, cy, r: f32, color: [4]f32) {
+plat_draw_circle :: proc(p: ^common.Platform, cx, cy, r: f32, color: [4]f32) {
 	gfx_push_circle(&app_of(p).graphics, cx, cy, r, color)
 }
 
 @(private="file")
-plat_draw_line :: proc(p: ^game.Platform, ax, ay, bx, by, t: f32, color: [4]f32) {
+plat_draw_line :: proc(p: ^common.Platform, ax, ay, bx, by, t: f32, color: [4]f32) {
 	gfx_push_line(&app_of(p).graphics, ax, ay, bx, by, t, color)
 }
 
 @(private="file")
-plat_draw_text :: proc(p: ^game.Platform, x, y: f32, s: string, color: [4]f32, font: game.Font_Size) {
+plat_draw_text :: proc(p: ^common.Platform, x, y: f32, s: string, color: [4]f32, font: common.Font_Size) {
 	text_push(&app_of(p).graphics.text, x, y, s, color, to_native_font(font))
 }
 
 @(private="file")
-plat_text_measure :: proc(p: ^game.Platform, s: string, font: game.Font_Size) -> f32 {
+plat_text_measure :: proc(p: ^common.Platform, s: string, font: common.Font_Size) -> f32 {
 	return text_measure(&app_of(p).graphics.text, s, to_native_font(font))
 }
 
 @(private="file")
-plat_font_size_px :: proc(p: ^game.Platform, font: game.Font_Size) -> f32 {
+plat_font_size_px :: proc(p: ^common.Platform, font: common.Font_Size) -> f32 {
 	return font_pixel_size(to_native_font(font))
 }
 
 @(private="file")
-plat_set_camera :: proc(p: ^game.Platform, scale, offset: [2]f32) {
+plat_set_camera :: proc(p: ^common.Platform, scale, offset: [2]f32) {
 	gfx_set_view(&app_of(p).graphics, scale, offset)
 }
 
 @(private="file")
-plat_clear_camera :: proc(p: ^game.Platform) {
+plat_clear_camera :: proc(p: ^common.Platform) {
 	gfx_clear_view(&app_of(p).graphics)
 }
 
 @(private="file")
-plat_push_scissor :: proc(p: ^game.Platform, x, y, w, h: f32) {
+plat_push_scissor :: proc(p: ^common.Platform, x, y, w, h: f32) {
 	gfx_push_scissor(&app_of(p).graphics, x, y, w, h)
 }
 
 @(private="file")
-plat_pop_scissor :: proc(p: ^game.Platform) {
+plat_pop_scissor :: proc(p: ^common.Platform) {
 	gfx_pop_scissor(&app_of(p).graphics)
 }
 
 @(private="file")
-plat_fog_lights_clear :: proc(p: ^game.Platform) {
+plat_fog_lights_clear :: proc(p: ^common.Platform) {
 	gfx_clear_fog_lights(&app_of(p).graphics)
 }
 
 @(private="file")
-plat_fog_lights_push :: proc(p: ^game.Platform, x, y: f32) {
+plat_fog_lights_push :: proc(p: ^common.Platform, x, y: f32) {
 	gfx_push_fog_light(&app_of(p).graphics, x, y)
 }
 
 @(private="file")
-plat_toggle_fullscreen :: proc(p: ^game.Platform) {
+plat_toggle_fullscreen :: proc(p: ^common.Platform) {
 	a := app_of(p)
 	if !a.is_fullscreen {
 		a.windowed_x, a.windowed_y = glfw.GetWindowPos(a.window)
@@ -370,28 +371,28 @@ plat_toggle_fullscreen :: proc(p: ^game.Platform) {
 }
 
 @(private="file")
-plat_request_quit :: proc(p: ^game.Platform) {
+plat_request_quit :: proc(p: ^common.Platform) {
 	app_of(p).should_quit = true
 }
 
 // CrazyGames hooks are no-ops on the desktop build — no SDK to talk to.
 @(private="file")
-plat_request_midgame_ad :: proc(p: ^game.Platform) {}
+plat_request_midgame_ad :: proc(p: ^common.Platform) {}
 @(private="file")
-plat_request_happytime  :: proc(p: ^game.Platform) {}
+plat_request_happytime  :: proc(p: ^common.Platform) {}
 
 @(private="file")
-plat_play_sound :: proc(p: ^game.Platform, sound: game.Sound) {
+plat_play_sound :: proc(p: ^common.Platform, sound: common.Sound) {
 	audio_play(&app_of(p).audio, sound)
 }
 
 @(private="file")
-plat_play_sound_at :: proc(p: ^game.Platform, sound: game.Sound, x, y: f32) {
+plat_play_sound_at :: proc(p: ^common.Platform, sound: common.Sound, x, y: f32) {
 	audio_play_at(&app_of(p).audio, sound, x, y)
 }
 
 @(private="file")
-plat_set_sound_loop :: proc(p: ^game.Platform, sound: game.Sound, active: bool, x, y: f32) {
+plat_set_sound_loop :: proc(p: ^common.Platform, sound: common.Sound, active: bool, x, y: f32) {
 	audio_set_loop(&app_of(p).audio, sound, active, x, y)
 }
 
@@ -399,9 +400,9 @@ plat_set_sound_loop :: proc(p: ^game.Platform, sound: game.Sound, active: bool, 
 // default lets the game start with sensible values. Wire to a real file
 // (e.g. %APPDATA%\Adventum\settings.ini) when desktop release matters.
 @(private="file")
-plat_save_f32 :: proc(p: ^game.Platform, key: string, value: f32) {}
+plat_save_f32 :: proc(p: ^common.Platform, key: string, value: f32) {}
 
 @(private="file")
-plat_load_f32 :: proc(p: ^game.Platform, key: string, default_value: f32) -> f32 {
+plat_load_f32 :: proc(p: ^common.Platform, key: string, default_value: f32) -> f32 {
 	return default_value
 }

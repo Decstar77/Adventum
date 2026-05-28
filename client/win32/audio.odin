@@ -29,13 +29,13 @@ import "core:strings"
 import "core:time"
 import ma "vendor:miniaudio"
 
-import "../game"
+import "../common"
 
 // Minimum gap between consecutive plays of the same family. Applies to both
 // the spatial and non-spatial paths — spatial diversity (pan + attenuation)
 // doesn't help when twenty copies of the same wav land in the same 50 ms.
 @(private="file")
-SOUND_MIN_INTERVAL := [game.Sound]time.Duration{
+SOUND_MIN_INTERVAL := [common.Sound]time.Duration{
 	.None             = 0,
 	.Button_Hover     = 50  * time.Millisecond,
 	.Button_Click     = 0,
@@ -55,7 +55,7 @@ SOUND_MIN_INTERVAL := [game.Sound]time.Duration{
 // still playing, new positional plays of the same family are dropped. UI / non-
 // spatial plays don't count toward this — they don't go through `a.active`.
 @(private="file")
-SOUND_MAX_VOICES := [game.Sound]i32{
+SOUND_MAX_VOICES := [common.Sound]i32{
 	.None             = 0,
 	.Button_Hover     = 0,
 	.Button_Click     = 0,
@@ -75,7 +75,7 @@ SOUND_MAX_VOICES := [game.Sound]i32{
 // different levels, so this is the per-sound calibration knob — bump or cut
 // here by ear rather than re-encoding the asset. 1.0 = unchanged.
 @(private="file")
-SOUND_GAIN := [game.Sound]f32{
+SOUND_GAIN := [common.Sound]f32{
 	.None             = 1.0,
 	.Button_Hover     = 0.3,
 	.Button_Click     = 0.3,
@@ -93,7 +93,7 @@ SOUND_GAIN := [game.Sound]f32{
 
 // Variants per family. Order matches `res/sounds/`; randomly sampled at play.
 @(private="file")
-SOUND_FILES := [game.Sound][]string{
+SOUND_FILES := [common.Sound][]string{
 	.None             = {},
 	.Button_Hover     = {"res/sounds/button-hover.wav"},
 	.Button_Click     = {"res/sounds/button-click.wav"},
@@ -154,7 +154,7 @@ AUDIO_ROLLOFF         :: f32(1.0)
 // without re-walking the heap-allocated sound to ask miniaudio.
 Active_Voice :: struct {
 	sound: ^ma.sound,
-	kind:  game.Sound,
+	kind:  common.Sound,
 }
 
 Audio :: struct {
@@ -162,15 +162,15 @@ Audio :: struct {
 	ready:       bool,
 	// Null-terminated paths to hand to miniaudio. Built once at init so
 	// audio_play is allocation-free at the call site.
-	cpaths:      [game.Sound][dynamic]cstring,
-	last_played: [game.Sound]time.Tick,
+	cpaths:      [common.Sound][dynamic]cstring,
+	last_played: [common.Sound]time.Tick,
 	// In-flight positional voices. Each entry was allocated by `audio_play_at`;
 	// we sweep these once per frame and uninit + free any that have reached
 	// their end. Per-family count is the concurrent-voice cap input.
 	active:      [dynamic]Active_Voice,
 	// Looped voices, one per family. Started/stopped on transition by
 	// `audio_set_loop`; null entries mean "not currently playing".
-	loops:       [game.Sound]^ma.sound,
+	loops:       [common.Sound]^ma.sound,
 	music:       Music,
 }
 
@@ -387,7 +387,7 @@ music_tick :: proc(a: ^Audio) {
 }
 
 @(private="file")
-voices_of :: proc(a: ^Audio, kind: game.Sound) -> i32 {
+voices_of :: proc(a: ^Audio, kind: common.Sound) -> i32 {
 	n: i32 = 0
 	for v in a.active do if v.kind == kind do n += 1
 	return n
@@ -406,7 +406,7 @@ pick_variant :: proc(variants: [dynamic]cstring) -> (cstring, bool) {
 // (same space as `audio_play_at`) and re-applied every call while the loop is
 // active, so the emitter can drift as the game's centroid moves without
 // restarting the sound.
-audio_set_loop :: proc(a: ^Audio, sound: game.Sound, active: bool, x_px, y_px: f32) {
+audio_set_loop :: proc(a: ^Audio, sound: common.Sound, active: bool, x_px, y_px: f32) {
 	if !a.ready do return
 	playing := a.loops[sound] != nil
 	if !active {
@@ -450,7 +450,7 @@ audio_set_loop :: proc(a: ^Audio, sound: game.Sound, active: bool, x_px, y_px: f
 }
 
 // Non-spatial play. Honors the per-family cooldown table.
-audio_play :: proc(a: ^Audio, sound: game.Sound) {
+audio_play :: proc(a: ^Audio, sound: common.Sound) {
 	if !a.ready do return
 	path, ok := pick_variant(a.cpaths[sound])
 	if !ok do return
@@ -484,7 +484,7 @@ audio_play :: proc(a: ^Audio, sound: game.Sound) {
 // can't pile up: a per-family cooldown (no two plays of the same family
 // within `SOUND_MIN_INTERVAL`) and a per-family concurrent-voice cap (no more
 // than `SOUND_MAX_VOICES` copies ringing out at once).
-audio_play_at :: proc(a: ^Audio, sound: game.Sound, x_px, y_px: f32) {
+audio_play_at :: proc(a: ^Audio, sound: common.Sound, x_px, y_px: f32) {
 	if !a.ready do return
 	path, ok := pick_variant(a.cpaths[sound])
 	if !ok do return

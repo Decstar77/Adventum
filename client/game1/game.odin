@@ -1,9 +1,11 @@
 package game
 
+import "../common"
+
 import "core:fmt"
 import "core:math"
 
-// Game owns all simulation + UI state. The host (win32, web, ...) constructs
+// Game owns all simulation + common.UI state. The host (win32, web, ...) constructs
 // one of these, calls game_init, then drives game_update_and_render(g, p) each
 // frame after filling in the per-frame fields of `p`.
 
@@ -18,12 +20,12 @@ Selection_Mode :: enum {
 
 Game :: struct {
 	world: World,
-	cam:   Camera,
-	ui:    UI,
+	cam:   common.Camera,
+	ui:    common.UI,
 
 	mode:          Selection_Mode,
 	selected_kind: Tile_Kind,
-	selected_tile: Hex_Coord,
+	selected_tile: common.Hex_Coord,
 	has_selection: bool,
 
 	// Pause menu. Volume persists across sessions via the host's save_f32
@@ -79,10 +81,10 @@ Cost_Sign :: enum { Spend, Gain }
 // Button with a label followed by a signed cost and a food icon, e.g.
 // "Upgrade  -15 [food]" or "Sell  +7 [food]". The label, number, and icon
 // are centered together as one cluster so the spacing reads as a single tag.
-button_with_food_cost :: proc(ui: ^UI, p: ^Platform, label: string, amount: i32, sign: Cost_Sign, x, y, w, h: f32, disabled: bool = false) -> bool {
-	hover := !disabled && point_in_rect(p.mouse, x, y, w, h)
+button_with_food_cost :: proc(ui: ^common.UI, p: ^common.Platform, label: string, amount: i32, sign: Cost_Sign, x, y, w, h: f32, disabled: bool = false) -> bool {
+	hover := !disabled && common.point_in_rect(p.mouse, x, y, w, h)
 	held  := hover && p.mouse_left_down
-	ui_track_hover(ui, p, hover, ui_button_key(x, y))
+	common.ui_track_hover(ui, p, hover, common.ui_button_key(x, y))
 
 	BASE  := [4]f32{0.18, 0.20, 0.26, 1.0}
 	HOVER := [4]f32{0.26, 0.30, 0.40, 1.0}
@@ -133,10 +135,10 @@ button_with_food_cost :: proc(ui: ^UI, p: ^Platform, label: string, amount: i32,
 // Same shape as button_with_food_cost but renders the cost in scrap. Repair is
 // the only scrap-spend button on the selection panel right now, but the helper
 // is generic so it can host future scrap-priced actions without copy/paste.
-button_with_scrap_cost :: proc(ui: ^UI, p: ^Platform, label: string, amount: i32, x, y, w, h: f32, disabled: bool = false) -> bool {
-	hover := !disabled && point_in_rect(p.mouse, x, y, w, h)
+button_with_scrap_cost :: proc(ui: ^common.UI, p: ^common.Platform, label: string, amount: i32, x, y, w, h: f32, disabled: bool = false) -> bool {
+	hover := !disabled && common.point_in_rect(p.mouse, x, y, w, h)
 	held  := hover && p.mouse_left_down
-	ui_track_hover(ui, p, hover, ui_button_key(x, y))
+	common.ui_track_hover(ui, p, hover, common.ui_button_key(x, y))
 
 	BASE  := [4]f32{0.18, 0.20, 0.26, 1.0}
 	HOVER := [4]f32{0.26, 0.30, 0.40, 1.0}
@@ -197,12 +199,12 @@ tutorial_allowed_kind :: proc(g: ^Game) -> (kind: Tile_Kind, gated: bool) {
 }
 
 @(private="file")
-HOTKEYS := [BUILDABLE_COUNT]Key{
+HOTKEYS := [BUILDABLE_COUNT]common.Key{
 	.Num1, .Num2, .Num3, .Num4, .Num5, .Num6, .Num7,
 }
 
-game_init :: proc(g: ^Game, p: ^Platform) {
-	g.cam = Camera{pos = {0, 0}, zoom = 1}
+game_init :: proc(g: ^Game, p: ^common.Platform) {
+	g.cam = common.Camera{pos = {0, 0}, zoom = 1}
 	g.selected_kind = .Farm
 	g.mode = .Default
 	g.volume = p.load_f32 != nil ? p->load_f32("volume", 0.1) : 0.1
@@ -223,7 +225,7 @@ game_init :: proc(g: ^Game, p: ^Platform) {
 
 game_shutdown :: proc(g: ^Game) {
 	world_shutdown(&g.world)
-	ui_shutdown(&g.ui)
+	common.ui_shutdown(&g.ui)
 }
 
 // Reset the world to a fresh start. Used by the game-over `R` shortcut and the
@@ -233,7 +235,7 @@ game_restart :: proc(g: ^Game) {
 	g.world = World{}
 	world_init(&g.world)
 	world_tick(&g.world, 0)
-	g.cam = Camera{pos = {0, 0}, zoom = 1}
+	g.cam = common.Camera{pos = {0, 0}, zoom = 1}
 	g.selected_kind = .Farm
 	g.mode = .Default
 	g.has_selection = false
@@ -250,7 +252,7 @@ game_restart :: proc(g: ^Game) {
 // Stylised gear icon for the pause-menu button — four cardinal teeth, a body
 // disc, and a darker hole. We don't have rotated quads, so the teeth sit on
 // the axes; that's enough to read as a gear at this size.
-draw_gear_icon :: proc(p: ^Platform, cx, cy, s: f32, color: [4]f32) {
+draw_gear_icon :: proc(p: ^common.Platform, cx, cy, s: f32, color: [4]f32) {
 	r := s * 0.5
 	tw := s * 0.20
 	th := s * 0.22
@@ -262,7 +264,7 @@ draw_gear_icon :: proc(p: ^Platform, cx, cy, s: f32, color: [4]f32) {
 	p->draw_circle(cx, cy, r * 0.28, {0.10, 0.11, 0.14, 1})
 }
 
-game_update_and_render :: proc(g: ^Game, p: ^Platform) {
+game_update_and_render :: proc(g: ^Game, p: ^common.Platform) {
 	dt := p.dt
 	sw := p.screen_w
 	sh := p.screen_h
@@ -322,7 +324,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	// 	g.fps_frames = 0
 	// }
 
-	ui_begin_frame(&g.ui)
+	common.ui_begin_frame(&g.ui)
 
 	// Escape opens the pause menu when nothing else needs cancelling. If the
 	// player is mid-placement or has a tile selected, escape clears that first
@@ -343,7 +345,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 
 	paused := g.paused
 
-	// Camera pan via WASD plus an edge-of-screen mouse pan.
+	// common.Camera pan via WASD plus an edge-of-screen mouse pan.
 	PAN_SPEED       :: f32(400)
 	EDGE_MARGIN     :: f32(24)
 	EDGE_PAN_SPEED  :: f32(550)
@@ -379,12 +381,12 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	}
 
 	if !paused && p.scroll_dy != 0 {
-		before := camera_screen_to_world(&g.cam, p.mouse, sw, sh)
+		before := common.camera_screen_to_world(&g.cam, p.mouse, sw, sh)
 		zoom_factor := f32(1) + p.scroll_dy * 0.1
 		g.cam.zoom *= zoom_factor
 		if g.cam.zoom < 0.6 do g.cam.zoom = 0.6
 		if g.cam.zoom > 1.2   do g.cam.zoom = 1.2
-		after := camera_screen_to_world(&g.cam, p.mouse, sw, sh)
+		after := common.camera_screen_to_world(&g.cam, p.mouse, sw, sh)
 		g.cam.pos += before - after
 	}
 
@@ -504,17 +506,17 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 
 	// Flush the simulation's queued sounds. Positional entries are forwarded
 	// to `play_sound_at` so the host can pan/attenuate; non-positional ones
-	// (UI cues, EMP cast) go to `play_sound`. We cap how many *positional*
+	// (common.UI cues, EMP cast) go to `play_sound`. We cap how many *positional*
 	// plays per family fire in one frame — eighteen turrets firing on the
 	// same tick used to be a wall of noise; now we play at most a couple so
-	// spatial diversity remains while bounded. UI / non-positional families
+	// spatial diversity remains while bounded. common.UI / non-positional families
 	// collapse to one play per frame as before. Even with this cap the host
 	// applies its own per-family cooldown + concurrent-voice cap, so the
 	// effective rate per family is much lower than `LIMIT × fps` would
 	// suggest.
 	POSITIONAL_PER_FAMILY_LIMIT :: 2
-	pos_count:    [Sound]i32
-	seen_nonpos:  [Sound]bool
+	pos_count:    [common.Sound]i32
+	seen_nonpos:  [common.Sound]bool
 	for q in g.world.sound_queue {
 		if q.has_pos {
 			if pos_count[q.kind] >= POSITIONAL_PER_FAMILY_LIMIT do continue
@@ -534,22 +536,22 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	picker_y    := sh - picker_h - 12
 	picker_w    := f32(BUILDABLE_COUNT) * 132 + f32(BUILDABLE_COUNT - 1) * 8 + picker_pad * 2
 	picker_x    := (sw - picker_w) * 0.5
-	mouse_in_picker := point_in_rect(p.mouse, picker_x, picker_y, picker_w, picker_h)
+	mouse_in_picker := common.point_in_rect(p.mouse, picker_x, picker_y, picker_w, picker_h)
 
 	// Right-side selection panel (only visible when something is selected).
 	// Vertically centred on the right edge so it sits clear of the gear +
 	// ability stack in the top-right corner.
 	panel_x := sw - PANEL_W - 12
 	panel_y := (sh - PANEL_H) * 0.5
-	mouse_in_panel := g.has_selection && point_in_rect(p.mouse, panel_x, panel_y, PANEL_W, PANEL_H)
+	mouse_in_panel := g.has_selection && common.point_in_rect(p.mouse, panel_x, panel_y, PANEL_W, PANEL_H)
 
-	// Gear button (top-right). Always above other UI so the player can pause
+	// Gear button (top-right). Always above other common.UI so the player can pause
 	// even mid-placement; we suppress world clicks underneath it as well.
 	GEAR_S := f32(36)
 	gear_x := sw - 12 - GEAR_S
 	gear_y := f32(12)
-	mouse_in_gear := point_in_rect(p.mouse, gear_x, gear_y, GEAR_S, GEAR_S)
-	ui_track_hover(&g.ui, p, mouse_in_gear, ui_button_key(gear_x, gear_y))
+	mouse_in_gear := common.point_in_rect(p.mouse, gear_x, gear_y, GEAR_S, GEAR_S)
+	common.ui_track_hover(&g.ui, p, mouse_in_gear, common.ui_button_key(gear_x, gear_y))
 	if !paused && mouse_in_gear && p.mouse_left_pressed {
 		g.paused = true
 		p->play_sound(.Button_Click)
@@ -566,11 +568,11 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	bomb_y := gear_y + GEAR_S + 10
 	emp_x  := bomb_x
 	emp_y  := bomb_y + ABIL_H + ABIL_GAP
-	mouse_in_bomb := point_in_rect(p.mouse, bomb_x, bomb_y, ABIL_W, ABIL_H)
-	mouse_in_emp  := point_in_rect(p.mouse, emp_x,  emp_y,  ABIL_W, ABIL_H)
+	mouse_in_bomb := common.point_in_rect(p.mouse, bomb_x, bomb_y, ABIL_W, ABIL_H)
+	mouse_in_emp  := common.point_in_rect(p.mouse, emp_x,  emp_y,  ABIL_W, ABIL_H)
 	mouse_in_abilities := mouse_in_bomb || mouse_in_emp
-	ui_track_hover(&g.ui, p, mouse_in_bomb, ui_button_key(bomb_x, bomb_y))
-	ui_track_hover(&g.ui, p, mouse_in_emp,  ui_button_key(emp_x,  emp_y))
+	common.ui_track_hover(&g.ui, p, mouse_in_bomb, common.ui_button_key(bomb_x, bomb_y))
+	common.ui_track_hover(&g.ui, p, mouse_in_emp,  common.ui_button_key(emp_x,  emp_y))
 	if !paused && !g.world.game_over && !g.world.victory {
 		if mouse_in_bomb && p.mouse_left_pressed && world_can_use_bomb(&g.world) {
 			g.mode = .Target_Bomb
@@ -583,8 +585,8 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	}
 
 	// Hex under cursor
-	mouse_world := camera_screen_to_world(&g.cam, p.mouse, sw, sh)
-	hover := pixel_to_hex(mouse_world)
+	mouse_world := common.camera_screen_to_world(&g.cam, p.mouse, sw, sh)
+	hover := common.pixel_to_hex(mouse_world)
 
 	// Right-mouse pan. While RMB is held, drag the camera by the mouse
 	// delta (in world units, so the tile under the cursor stays under it).
@@ -619,7 +621,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		if lmb_just && g.mode == .Target_Bomb {
 			// Drop the bomb at the hovered hex's pixel centre so the AoE
 			// reads as anchored to a tile rather than a cursor pixel.
-			tgt := hex_to_pixel(hover)
+			tgt := common.hex_to_pixel(hover)
 			if world_use_bomb(&g.world, tgt) {
 				g.mode = .Default
 			}
@@ -652,12 +654,12 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	// independent of the current 2D affine.
 	p->fog_lights_clear()
 	for coord, _ in g.world.tiles {
-		c := hex_to_pixel(coord)
+		c := common.hex_to_pixel(coord)
 		p->fog_lights_push(c.x, c.y)
 	}
 
 	// World pass
-	scale, offset := camera_view(&g.cam, sw, sh)
+	scale, offset := common.camera_view(&g.cam, sw, sh)
 	p->set_camera(scale, offset)
 	world_render(&g.world, p)
 	enemies_render(&g.world, p)
@@ -668,7 +670,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	// Exponential smoothing toward the hovered hex's pixel centre.
 	// a = lerp(a, B, 1 - exp(-dt * RATE)) — frame-rate independent.
 	HOVER_SMOOTH_RATE :: f32(30)
-	hover_target := hex_to_pixel(hover)
+	hover_target := common.hex_to_pixel(hover)
 	if !g.hover_smoothed_init {
 		g.hover_smoothed = hover_target
 		g.hover_smoothed_init = true
@@ -684,10 +686,10 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		// Bomb-target preview: orange ring at exactly the damage radius so the
 		// player knows what they're about to vaporise.
 		if g.mode == .Target_Bomb {
-			tgt := hex_to_pixel(hover)
+			tgt := common.hex_to_pixel(hover)
 			ring := [4]f32{1.0, 0.55, 0.20, 0.85}
 			p->draw_circle(tgt.x, tgt.y, BOMB_RADIUS,        {1.0, 0.55, 0.20, 0.18})
-			draw_hex_outline_at(p, tgt, 2.5, ring)
+			common.draw_hex_outline_at(p, tgt, 2.5, ring)
 			// Coarse ring approximation using line segments.
 			SEG :: 36
 			prev_x := tgt.x + BOMB_RADIUS
@@ -703,17 +705,17 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 
 		if g.mode == .Default && !mouse_in_picker && !mouse_in_panel && !mouse_in_gear && !mouse_in_abilities && !paused {
 			if _, ok := g.world.tiles[hover]; ok {
-				draw_hex_outline(p, hover, 2.5, {1, 1, 1, 0.9})
+				common.draw_hex_outline(p, hover, 2.5, {1, 1, 1, 0.9})
 			}
 		}
 		if g.has_selection {
 			// Influence halo first so the bright selection outline draws on top.
 			world_render_selection_influence(&g.world, p, g.selected_tile)
-			draw_hex_outline(p, g.selected_tile, 3, {1, 1, 1, 1})
+			common.draw_hex_outline(p, g.selected_tile, 3, {1, 1, 1, 1})
 		}
 	}
 
-	// UI / screen-space pass
+	// common.UI / screen-space pass
 	p->clear_camera()
 
 	font_small := p->font_size_px(.Small)
@@ -740,7 +742,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		// kind for the current step is selectable.
 		tutorial_locked := tut_gated && kind != tut_kind
 		locked := (kind == .Mortar && mortar_locked) || (kind == .Flak && flak_locked) || tutorial_locked
-		clicked := ui_button(&g.ui, p, "", x, by, bw, bh)
+		clicked := common.ui_button(&g.ui, p, "", x, by, bw, bh)
 		if clicked && !locked {
 			g.selected_kind = kind
 			g.mode = .Place
@@ -869,12 +871,12 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 
 		// Skip button bottom-right inside the card. Closes the tutorial and
 		// persists the flag so it never returns. Hover/edge-detect goes through
-		// the same ui_button helper as everything else.
+		// the same common.ui_button helper as everything else.
 		skip_w := f32(80)
 		skip_h := f32(24)
 		skip_x := tut_x + TUT_W - skip_w - 10
 		skip_y := tut_y + TUT_H - skip_h - 8
-		if ui_button(&g.ui, p, "Skip", skip_x, skip_y, skip_w, skip_h) {
+		if common.ui_button(&g.ui, p, "Skip", skip_x, skip_y, skip_w, skip_h) {
 			g.tutorial_active = false
 			if p.save_f32 != nil do p->save_f32("tutorial_done", 1)
 		}
@@ -1046,7 +1048,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 				g.has_selection = false
 			}
 		} else {
-			ui_button_at(&g.ui, p, "Sell  (locked)", btn_x, sell_y, btn_w, btn_h)
+			common.ui_button_at(&g.ui, p, "Sell  (locked)", btn_x, sell_y, btn_w, btn_h)
 		}
 
 		if tile_is_upgradeable(tile.kind) {
@@ -1056,7 +1058,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 			clicked: bool
 			switch {
 			case at_max:
-				ui_button_at(&g.ui, p, "Upgrade  (max)", btn_x, upgrade_y, btn_w, btn_h)
+				common.ui_button_at(&g.ui, p, "Upgrade  (max)", btn_x, upgrade_y, btn_w, btn_h)
 			case:
 				clicked = button_with_food_cost(&g.ui, p, "Upgrade", i32(up_cost), .Spend, btn_x, upgrade_y, btn_w, btn_h, !can_up)
 			}
@@ -1113,7 +1115,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 	// panel. Each shows label, hotkey, the dual food/scrap cost on one line,
 	// and — while on cooldown — a translucent overlay with the seconds left.
 	{
-		draw_ability :: proc(p: ^Platform, label, hotkey: string, x, y, w, h: f32,
+		draw_ability :: proc(p: ^common.Platform, label, hotkey: string, x, y, w, h: f32,
 			ready, hover, held: bool, cooldown, cooldown_max: f32,
 			food_cost: i32, scrap_cost: i32) {
 			BASE  := [4]f32{0.18, 0.20, 0.26, 0.92}
@@ -1241,7 +1243,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 			hit_y := track_y - 12
 			hit_w := track_w
 			hit_h := track_h + 24
-			if p.mouse_left_pressed && point_in_rect(p.mouse, hit_x, hit_y, hit_w, hit_h) {
+			if p.mouse_left_pressed && common.point_in_rect(p.mouse, hit_x, hit_y, hit_w, hit_h) {
 				g.volume_dragging = true
 			}
 			if g.volume_dragging {
@@ -1261,13 +1263,13 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 		controls_y := py + PMH - 16 - btn_h*2 - 10
 		resume_y   := py + PMH - 16 - btn_h
 		if !g.show_controls {
-			if ui_button(&g.ui, p, "Restart",  bx, restart_y,  btn_w, btn_h) {
+			if common.ui_button(&g.ui, p, "Restart",  bx, restart_y,  btn_w, btn_h) {
 				game_restart(g)
 			}
-			if ui_button(&g.ui, p, "Controls", bx, controls_y, btn_w, btn_h) {
+			if common.ui_button(&g.ui, p, "Controls", bx, controls_y, btn_w, btn_h) {
 				g.show_controls = true
 			}
-			if ui_button(&g.ui, p, "Resume",   bx, resume_y,   btn_w, btn_h) {
+			if common.ui_button(&g.ui, p, "Resume",   bx, resume_y,   btn_w, btn_h) {
 				g.paused = false
 			}
 		}
@@ -1317,7 +1319,7 @@ game_update_and_render :: proc(g: ^Game, p: ^Platform) {
 			cb_h := f32(40)
 			cb_x := cx + 24
 			cb_y := cy + CMH - 16 - cb_h
-			if ui_button(&g.ui, p, "Back", cb_x, cb_y, cb_w, cb_h) {
+			if common.ui_button(&g.ui, p, "Back", cb_x, cb_y, cb_w, cb_h) {
 				g.show_controls = false
 			}
 		}

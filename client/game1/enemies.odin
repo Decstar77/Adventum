@@ -1,5 +1,7 @@
 package game
 
+import "../common"
+
 import "core:math"
 import "core:math/rand"
 
@@ -65,7 +67,7 @@ Enemy_Projectile :: struct {
 	vel:    [2]f32,
 	dmg:    f32,
 	life:   f32,
-	target: Hex_Coord,
+	target: common.Hex_Coord,
 }
 
 Pathing_Weights :: struct {
@@ -145,8 +147,8 @@ enemy_kind_name :: proc(kind: Enemy_Kind) -> string {
 }
 
 Path_Field :: struct {
-	dist: map[Hex_Coord]i32,
-	next: map[Hex_Coord]Hex_Coord,
+	dist: map[common.Hex_Coord]i32,
+	next: map[common.Hex_Coord]common.Hex_Coord,
 }
 
 path_field_clear :: proc(f: ^Path_Field) {
@@ -163,11 +165,11 @@ build_path_field :: proc(w: ^World, field: ^Path_Field, weights: Pathing_Weights
 	path_field_clear(field)
 	field.dist[w.core] = 0
 
-	open: [dynamic]Hex_Coord
+	open: [dynamic]common.Hex_Coord
 	defer delete(open)
 	append(&open, w.core)
 
-	settled: map[Hex_Coord]bool
+	settled: map[common.Hex_Coord]bool
 	defer delete(settled)
 
 	for len(open) > 0 {
@@ -190,9 +192,9 @@ build_path_field :: proc(w: ^World, field: ^Path_Field, weights: Pathing_Weights
 		settled[cur] = true
 		cur_dist := field.dist[cur]
 
-		for d in HEX_NEIGHBOR_OFFSETS {
-			n := Hex_Coord{cur.x + d.x, cur.y + d.y}
-			if hex_distance(n, w.core) > WORLD_RADIUS_HEX do continue
+		for d in common.HEX_NEIGHBOR_OFFSETS {
+			n := common.Hex_Coord{cur.x + d.x, cur.y + d.y}
+			if common.hex_distance(n, w.core) > WORLD_RADIUS_HEX do continue
 
 			cost: i32
 			if t, ok := w.tiles[n]; ok {
@@ -249,14 +251,14 @@ ENEMY_BODY_RADIUS :: f32(10)
 // world.tiles key plus an `ok` flag; if no tile qualifies the flyer just
 // drifts toward the core position in `enemies_update`.
 @(private="file")
-flyer_pick_target :: proc(w: ^World, from: [2]f32) -> (Hex_Coord, bool) {
-	best:    Hex_Coord
+flyer_pick_target :: proc(w: ^World, from: [2]f32) -> (common.Hex_Coord, bool) {
+	best:    common.Hex_Coord
 	best_d2: f32
 	found:   bool
 	// Pass 1: farms + generators.
 	for coord, t in w.tiles {
 		if t.kind != .Farm && t.kind != .Generator do continue
-		center := hex_to_pixel(coord)
+		center := common.hex_to_pixel(coord)
 		dx := center.x - from.x
 		dy := center.y - from.y
 		d2 := dx * dx + dy * dy
@@ -270,7 +272,7 @@ flyer_pick_target :: proc(w: ^World, from: [2]f32) -> (Hex_Coord, bool) {
 	// Pass 2: everything except walls (Core/Turret/Mortar/Relay/Flak).
 	for coord, t in w.tiles {
 		if t.kind == .Wall do continue
-		center := hex_to_pixel(coord)
+		center := common.hex_to_pixel(coord)
 		dx := center.x - from.x
 		dy := center.y - from.y
 		d2 := dx * dx + dy * dy
@@ -284,12 +286,12 @@ flyer_pick_target :: proc(w: ^World, from: [2]f32) -> (Hex_Coord, bool) {
 }
 
 @(private="file")
-nearest_tile_to :: proc(w: ^World, from: [2]f32) -> (Hex_Coord, bool) {
+nearest_tile_to :: proc(w: ^World, from: [2]f32) -> (common.Hex_Coord, bool) {
 	best_d2 := f32(0)
-	best:    Hex_Coord
+	best:    common.Hex_Coord
 	found := false
 	for coord in w.tiles {
-		center := hex_to_pixel(coord)
+		center := common.hex_to_pixel(coord)
 		dx := center.x - from.x
 		dy := center.y - from.y
 		d2 := dx * dx + dy * dy
@@ -331,7 +333,7 @@ enemies_update :: proc(w: ^World, dt: f32) {
 			target, has_target := flyer_pick_target(w, e.pos)
 			desired := e.heading
 			if has_target {
-				center := hex_to_pixel(target)
+				center := common.hex_to_pixel(target)
 				desired = math.atan2(center.y - e.pos.y, center.x - e.pos.x)
 			}
 			// Approach heading via the shortest signed delta, clamped to the
@@ -364,7 +366,7 @@ enemies_update :: proc(w: ^World, dt: f32) {
 			// flyer keeps moving past — no stop, just a quick contact.
 			if has_target {
 				if tile, present := w.tiles[target]; present {
-					center := hex_to_pixel(target)
+					center := common.hex_to_pixel(target)
 					dx := center.x - e.pos.x
 					dy := center.y - e.pos.y
 					d  := math.sqrt(dx*dx + dy*dy)
@@ -391,14 +393,14 @@ enemies_update :: proc(w: ^World, dt: f32) {
 
 		target, ok := nearest_tile_to(w, e.pos)
 		if !ok do continue
-		center := hex_to_pixel(target)
+		center := common.hex_to_pixel(target)
 		dx := center.x - e.pos.x
 		dy := center.y - e.pos.y
 		d := math.sqrt(dx * dx + dy * dy)
 
 		// Stop at the tile boundary (hex edge along the approach direction)
 		// rather than the tile centre, plus a small body-radius buffer.
-		boundary := hex_boundary_distance(-dx, -dy)
+		boundary := common.hex_boundary_distance(-dx, -dy)
 		stop_dist := boundary + ENEMY_BODY_RADIUS + enemy_attack_range(e.kind)
 
 		if d <= stop_dist {
@@ -470,7 +472,7 @@ enemy_projectiles_update :: proc(w: ^World, dt: f32) {
 
 		hit := false
 		if tile, present := w.tiles[ep.target]; present {
-			center := hex_to_pixel(ep.target)
+			center := common.hex_to_pixel(ep.target)
 			dx := center.x - ep.pos.x
 			dy := center.y - ep.pos.y
 			if dx*dx + dy*dy <= hit_r2 {
@@ -492,7 +494,7 @@ enemy_projectiles_update :: proc(w: ^World, dt: f32) {
 	}
 }
 
-enemy_projectiles_render :: proc(w: ^World, p: ^Platform) {
+enemy_projectiles_render :: proc(w: ^World, p: ^common.Platform) {
 	// Teal globule to match the Spitter's body palette.
 	core := [4]f32{0.114, 0.620, 0.459, 1}
 	rim  := [4]f32{0.78,  1.0,   0.92,  1}
@@ -503,7 +505,7 @@ enemy_projectiles_render :: proc(w: ^World, p: ^Platform) {
 }
 
 // Small health bar centred at (cx, cy). Skips drawing when at full health.
-draw_health_bar :: proc(p: ^Platform, cx, cy, width: f32, hp, max_hp: f32) {
+draw_health_bar :: proc(p: ^common.Platform, cx, cy, width: f32, hp, max_hp: f32) {
 	if max_hp <= 0 || hp >= max_hp do return
 	frac := clamp(hp / max_hp, 0, 1)
 	height := f32(3)
@@ -520,7 +522,7 @@ draw_health_bar :: proc(p: ^Platform, cx, cy, width: f32, hp, max_hp: f32) {
 	p->draw_rect(x, y, width * frac, height, fill_color)
 }
 
-enemies_render :: proc(w: ^World, p: ^Platform) {
+enemies_render :: proc(w: ^World, p: ^common.Platform) {
 	for e in w.enemies {
 		max_hp, _, _ := enemy_stats(e.kind)
 		switch e.kind {

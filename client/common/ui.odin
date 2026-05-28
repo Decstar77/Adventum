@@ -1,4 +1,4 @@
-package game
+package common
 
 LAYOUT_FILL :: f32(-1)
 
