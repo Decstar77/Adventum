@@ -10,7 +10,7 @@ package main
 
 import "base:runtime"
 import "../common"
-import "../game"
+import game "../game2"
 
 foreign import "host"
 
@@ -21,6 +21,14 @@ foreign host {
 	js_draw_line         :: proc(ax, ay, bx, by, t: f32, r, g, b, a: f32) ---
 	js_draw_text         :: proc(x, y: f32, ptr: rawptr, len: i32, r, g, b, a: f32, font: i32) ---
 	js_text_measure      :: proc(ptr: rawptr, len: i32, font: i32) -> f32 ---
+	// Pixel-art textures. `js_load_texture` kicks off an async Image load and
+	// returns a 1-based handle immediately; `js_texture_w/h` read 0 until the
+	// decode finishes, and `js_draw_texture` is a no-op while not ready. RGB
+	// tint is ignored on the canvas path (alpha is applied via globalAlpha).
+	js_load_texture      :: proc(ptr: rawptr, len: i32) -> i32 ---
+	js_texture_w         :: proc(tex: i32) -> f32 ---
+	js_texture_h         :: proc(tex: i32) -> f32 ---
+	js_draw_texture      :: proc(tex: i32, x, y, w, h: f32, r, g, b, a: f32) ---
 	js_set_camera        :: proc(sx, sy, ox, oy: f32) ---
 	js_clear_camera      :: proc() ---
 	js_push_scissor      :: proc(x, y, w, h: f32) ---
@@ -78,16 +86,14 @@ web_init :: proc "c" () {
 	g_started = true
 }
 
-// Called from JS when the browser tab loses focus or becomes hidden. We force
-// the pause menu open so the simulation freezes and the player explicitly
-// resumes when they tab back in. Also avoids the huge-dt simulation jump that
-// would otherwise hit on the next frame after requestAnimationFrame throttling.
+// Called from JS when the browser tab loses focus or becomes hidden. game2 has
+// no pause state yet, so this is a no-op for now — the dt clamp in host.js's
+// frame loop already guards against the huge-dt jump on the frame after a tab
+// regains focus. Wire a pause here once game2 grows a run/pause concept.
 @(export)
 web_blur :: proc "c" () {
 	context = runtime.default_context()
 	if !g_started do return
-	if g_game.world.game_over || g_game.world.victory do return
-	g_game.paused = true
 }
 
 // Called from JS keydown/keyup. `down` is 1 for press, 0 for release.
@@ -151,6 +157,9 @@ make_platform :: proc() -> common.Platform {
 		draw_text           = plat_draw_text,
 		text_measure        = plat_text_measure,
 		font_size_px        = plat_font_size_px,
+		load_texture        = plat_load_texture,
+		texture_size        = plat_texture_size,
+		draw_texture        = plat_draw_texture,
 		set_camera          = plat_set_camera,
 		clear_camera        = plat_clear_camera,
 		push_scissor        = plat_push_scissor,
@@ -245,6 +254,21 @@ plat_font_size_px :: proc(p: ^common.Platform, font: common.Font_Size) -> f32 {
 	case .Large: return 32
 	}
 	return 16
+}
+
+@(private="file")
+plat_load_texture :: proc(p: ^common.Platform, path: string) -> common.Texture {
+	return common.Texture(js_load_texture(raw_data(path), i32(len(path))))
+}
+
+@(private="file")
+plat_texture_size :: proc(p: ^common.Platform, tex: common.Texture) -> [2]f32 {
+	return {js_texture_w(i32(tex)), js_texture_h(i32(tex))}
+}
+
+@(private="file")
+plat_draw_texture :: proc(p: ^common.Platform, tex: common.Texture, x, y, w, h: f32, tint: [4]f32) {
+	js_draw_texture(i32(tex), x, y, w, h, tint[0], tint[1], tint[2], tint[3])
 }
 
 @(private="file")

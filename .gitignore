@@ -6,4 +6,5 @@ font.png
 .vscode
 build
 .claude
-res/cover
+client/game1/res
+client/game2/res

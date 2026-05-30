@@ -1,5 +1,5 @@
 @echo off
-rem Generate .ogg siblings for every SFX .wav in res\sounds\. The .wav files
+rem Generate .ogg siblings for every SFX .wav in client\game1\res\sounds\. The .wav files
 rem are kept so the win32 build (miniaudio, no Vorbis decoder by default)
 rem keeps working; the web build picks up the .ogg files instead — see
 rem client\web\host.js SOUND_FILES and build_web.bat's copy step.
@@ -14,7 +14,7 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
-pushd res\sounds
+pushd client\game1\res\sounds
 for %%F in (*.wav) do (
     echo Encoding %%~nF.ogg
     ffmpeg -y -loglevel error -i "%%F" -c:a libvorbis -q:a 3 -ac 1 "%%~nF.ogg"
@@ -27,7 +27,7 @@ for %%F in (*.wav) do (
 
 rem Re-encode music tracks in place at 96 kbps stereo. The originals are
 rem committed to git, so if you ever want the higher-quality source back you
-rem can `git checkout res/sounds/music-*.mp3`. ffmpeg refuses to write to the
+rem can `git checkout client/game1/res/sounds/music-*.mp3`. ffmpeg refuses to write to the
 rem input path so we go via a .tmp.mp3 sibling.
 for %%F in (music-*.mp3) do (
     echo Re-encoding %%F

@@ -14,6 +14,10 @@ Font_Size :: enum {
 	Large,
 }
 
+// Opaque, host-assigned texture handle. 0 is the invalid/not-loaded sentinel,
+// so a zero-valued field reads as "no texture" without any explicit init.
+Texture :: distinct u32
+
 // Sound families. The host owns the actual `.wav` assets and, where there are
 // multiple variants of one family (e.g. three turret-shoot recordings), picks
 // one at random per call so repeated plays don't sound mechanical.
@@ -80,6 +84,20 @@ Platform :: struct {
 	draw_text:    proc(p: ^Platform, x, y: f32, s: string, color: [4]f32, font: Font_Size),
 	text_measure: proc(p: ^Platform, s: string, font: Font_Size) -> f32,
 	font_size_px: proc(p: ^Platform, font: Font_Size) -> f32,
+
+	// Pixel-art textures. `path` is relative to the game's res/ folder (e.g.
+	// "Guns/Pistols/Outlined/1Pistol01.png"); the host prefixes its own asset
+	// root. Textures sample nearest-neighbour so pixel art stays crisp scaled
+	// up. `load_texture` returns 0 on failure. On the web host the decode is
+	// async — the handle is valid immediately but `texture_size` reads {0,0}
+	// and `draw_texture` is a no-op until the image finishes loading.
+	//
+	// `draw_texture` fills the dest rect (x,y,w,h) in the same coordinate space
+	// as draw_rect — world space under an active camera, else screen space —
+	// with the texture multiplied by `tint` ({1,1,1,1} leaves it unmodified).
+	load_texture:  proc(p: ^Platform, path: string) -> Texture,
+	texture_size:  proc(p: ^Platform, tex: Texture) -> [2]f32,
+	draw_texture:  proc(p: ^Platform, tex: Texture, x, y, w, h: f32, tint: [4]f32),
 
 	// View / clipping. set_camera applies a 2D affine: world -> screen via
 	// pos*scale + offset. clear_camera resets to identity (screen-space).

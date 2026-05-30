@@ -6,7 +6,7 @@ import "core:os"
 import tt "vendor:stb/truetype"
 import vk "vendor:vulkan"
 
-FONT_PATH       :: "res/fonts/SUSEMono-Regular.ttf"
+FONT_PATH       :: "client/game1/res/fonts/SUSEMono-Regular.ttf"
 FONT_PIXEL_SIZE :: 16.0      // legacy alias for the Small atlas; layout math still uses this
 FONT_FIRST_CHAR :: 32
 FONT_NUM_CHARS  :: 95

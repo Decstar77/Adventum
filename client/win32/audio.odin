@@ -91,36 +91,36 @@ SOUND_GAIN := [common.Sound]f32{
 	.Flak_Cannon_Loop = 1.0,
 }
 
-// Variants per family. Order matches `res/sounds/`; randomly sampled at play.
+// Variants per family. Order matches `client/game1/res/sounds/`; randomly sampled at play.
 @(private="file")
 SOUND_FILES := [common.Sound][]string{
 	.None             = {},
-	.Button_Hover     = {"res/sounds/button-hover.wav"},
-	.Button_Click     = {"res/sounds/button-click.wav"},
-	.Place_Building   = {"res/sounds/place_building_1.wav", "res/sounds/place_building_2.wav"},
-	.Building_Explode = {"res/sounds/building-explode.wav"},
+	.Button_Hover     = {"client/game1/res/sounds/button-hover.wav"},
+	.Button_Click     = {"client/game1/res/sounds/button-click.wav"},
+	.Place_Building   = {"client/game1/res/sounds/place_building_1.wav", "client/game1/res/sounds/place_building_2.wav"},
+	.Building_Explode = {"client/game1/res/sounds/building-explode.wav"},
 	.Turret_Shoot     = {
-		"res/sounds/blue_laser_1.wav",
-		"res/sounds/blue_laser_2.wav",
-		"res/sounds/blue_laser_3.wav",
+		"client/game1/res/sounds/blue_laser_1.wav",
+		"client/game1/res/sounds/blue_laser_2.wav",
+		"client/game1/res/sounds/blue_laser_3.wav",
 	},
 	.Enemy_Attack     = {
-		"res/sounds/enemy-attack-01.wav",
-		"res/sounds/enemy-attack-02.wav",
-		"res/sounds/enemy-attack-03.wav",
-		"res/sounds/enemy-attack-04.wav",
-		"res/sounds/enemy-attack-05.wav",
+		"client/game1/res/sounds/enemy-attack-01.wav",
+		"client/game1/res/sounds/enemy-attack-02.wav",
+		"client/game1/res/sounds/enemy-attack-03.wav",
+		"client/game1/res/sounds/enemy-attack-04.wav",
+		"client/game1/res/sounds/enemy-attack-05.wav",
 	},
 	.Enemy_Die        = {
-		"res/sounds/enemy-die-01.wav",
-		"res/sounds/enemy-die-02.wav",
-		"res/sounds/enemy-die-03.wav",
+		"client/game1/res/sounds/enemy-die-01.wav",
+		"client/game1/res/sounds/enemy-die-02.wav",
+		"client/game1/res/sounds/enemy-die-03.wav",
 	},
-	.Emp              = {"res/sounds/emp-sound.wav"},
-	.Sell             = {"res/sounds/sell-sound.wav"},
-	.Repair           = {"res/sounds/repair-sound.wav"},
-	.Upgrade          = {"res/sounds/ugrade-sound.wav"},
-	.Flak_Cannon_Loop = {"res/sounds/flack_cannon.wav"},
+	.Emp              = {"client/game1/res/sounds/emp-sound.wav"},
+	.Sell             = {"client/game1/res/sounds/sell-sound.wav"},
+	.Repair           = {"client/game1/res/sounds/repair-sound.wav"},
+	.Upgrade          = {"client/game1/res/sounds/ugrade-sound.wav"},
+	.Flak_Cannon_Loop = {"client/game1/res/sounds/flack_cannon.wav"},
 }
 
 // Music tracks. miniaudio decodes mp3 natively, and we stream them from disk
@@ -128,9 +128,9 @@ SOUND_FILES := [common.Sound][]string{
 // ~30 MB of decoded PCM.
 @(private="file")
 MUSIC_FILES := []string{
-	"res/sounds/music-01.mp3",
-	"res/sounds/music-02.mp3",
-	"res/sounds/music-03.mp3",
+	"client/game1/res/sounds/music-01.mp3",
+	"client/game1/res/sounds/music-02.mp3",
+	"client/game1/res/sounds/music-03.mp3",
 }
 
 // Crossfade duration between consecutive tracks. Also used as the lead time

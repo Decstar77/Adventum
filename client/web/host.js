@@ -805,6 +805,24 @@ function setSoundLoop(soundIdx, active, xPx, yPx) {
 // canvas's save/restore stack stays free for scissor clipping.
 let cam = { sx: 1, sy: 1, ox: 0, oy: 0 };
 
+// --- Textures ---------------------------------------------------------------
+// Pixel-art sprites. `js_load_texture` returns a 1-based handle immediately and
+// kicks off an async Image decode; index 0 is the reserved invalid slot. Paths
+// are relative to host.js (build_web mirrors the game's res/ folder alongside).
+const textures = [null];
+function loadTexture(path) {
+	const entry = { img: new Image(), ready: false, w: 0, h: 0 };
+	entry.img.onload = () => {
+		entry.ready = true;
+		entry.w = entry.img.naturalWidth;
+		entry.h = entry.img.naturalHeight;
+	};
+	entry.img.onerror = () => { console.warn('texture load failed:', path); };
+	entry.img.src = new URL(path, import.meta.url).href;
+	textures.push(entry);
+	return textures.length - 1;
+}
+
 let memory; // exports.memory once we've instantiated.
 const decoder = new TextDecoder();
 
@@ -859,6 +877,24 @@ const host = {
 	js_text_measure: (ptr, len, font) => {
 		ctx.font = fontStr(font);
 		return ctx.measureText(decodeString(ptr, len)).width;
+	},
+	js_load_texture: (ptr, len) => loadTexture(decodeString(ptr, len)),
+	js_texture_w: (tex) => { const e = textures[tex]; return e && e.ready ? e.w : 0; },
+	js_texture_h: (tex) => { const e = textures[tex]; return e && e.ready ? e.h : 0; },
+	js_draw_texture: (tex, x, y, w, h, r, g, b, a) => {
+		const e = textures[tex];
+		if (!e || !e.ready) return;
+		// Honour the active camera the same way the shape draws do.
+		const dx = x * cam.sx + cam.ox, dy = y * cam.sy + cam.oy;
+		const dw = w * cam.sx, dh = h * cam.sy;
+		// Nearest-neighbour so pixel art stays crisp scaled up (mirrors the
+		// win32 NEAREST sampler). RGB tint isn't expressible with a plain
+		// drawImage, so we apply only the alpha channel via globalAlpha.
+		ctx.imageSmoothingEnabled = false;
+		const prevAlpha = ctx.globalAlpha;
+		ctx.globalAlpha = a;
+		ctx.drawImage(e.img, dx, dy, dw, dh);
+		ctx.globalAlpha = prevAlpha;
 	},
 	js_set_camera:   (sx, sy, ox, oy) => {
 		cam   = { sx, sy, ox, oy };

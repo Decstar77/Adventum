@@ -7,7 +7,7 @@ import "vendor:glfw"
 import win "core:sys/windows"
 
 import "../common"
-import game "../game1"
+import game "../game2"
 
 // Win32/GLFW/Vulkan host. Owns the window, the Vulkan renderer, the input
 // snapshot, and a Platform of function pointers it hands to the game each
@@ -98,6 +98,9 @@ main :: proc() {
 		draw_text           = plat_draw_text,
 		text_measure        = plat_text_measure,
 		font_size_px        = plat_font_size_px,
+		load_texture        = plat_load_texture,
+		texture_size        = plat_texture_size,
+		draw_texture        = plat_draw_texture,
 		set_camera          = plat_set_camera,
 		clear_camera        = plat_clear_camera,
 		push_scissor        = plat_push_scissor,
@@ -314,6 +317,22 @@ plat_text_measure :: proc(p: ^common.Platform, s: string, font: common.Font_Size
 @(private="file")
 plat_font_size_px :: proc(p: ^common.Platform, font: common.Font_Size) -> f32 {
 	return font_pixel_size(to_native_font(font))
+}
+
+@(private="file")
+plat_load_texture :: proc(p: ^common.Platform, path: string) -> common.Texture {
+	full := fmt.tprintf("client/game2/res/%s", path)
+	return common.Texture(gfx_load_texture(&app_of(p).graphics, full))
+}
+
+@(private="file")
+plat_texture_size :: proc(p: ^common.Platform, tex: common.Texture) -> [2]f32 {
+	return gfx_texture_size(&app_of(p).graphics, u32(tex))
+}
+
+@(private="file")
+plat_draw_texture :: proc(p: ^common.Platform, tex: common.Texture, x, y, w, h: f32, tint: [4]f32) {
+	gfx_push_texture(&app_of(p).graphics, u32(tex), x, y, w, h, tint)
 }
 
 @(private="file")

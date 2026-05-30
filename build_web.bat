@@ -14,9 +14,9 @@ copy /y client\web\host.js     build\web\host.js     >nul
 rem Mirror runtime assets (sounds, fonts, sprites) so the dev server rooted
 rem at build\web\ can serve them alongside the wasm.
 if not exist build\web\res mkdir build\web\res
-xcopy /e /y /i /q res build\web\res >nul
+xcopy /e /y /i /q client\game2\res build\web\res >nul
 
-rem Strip the .wav source SFX — the web build loads the .ogg siblings
+rem Strip the .wav source SFX â€” the web build loads the .ogg siblings
 rem produced by compress_audio.bat instead. Music mp3s stay in the copy
 rem since host.js streams them via HTMLAudioElement.
 if exist build\web\res\sounds\*.wav del /q build\web\res\sounds\*.wav >nul

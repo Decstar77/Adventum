@@ -9,6 +9,10 @@ if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 "%VULKAN_SDK%\Bin\glslc.exe" client/shaders/text.frag -o client/shaders/text.frag.spv
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+"%VULKAN_SDK%\Bin\glslc.exe" client/shaders/sprite.vert -o client/shaders/sprite.vert.spv
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+"%VULKAN_SDK%\Bin\glslc.exe" client/shaders/sprite.frag -o client/shaders/sprite.frag.spv
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 "%VULKAN_SDK%\Bin\glslc.exe" client/shaders/background.vert -o client/shaders/background.vert.spv
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 "%VULKAN_SDK%\Bin\glslc.exe" client/shaders/background.frag -o client/shaders/background.frag.spv
