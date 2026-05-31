@@ -1,6 +1,7 @@
 package main
 
 import "core:fmt"
+import "core:math"
 import "core:strings"
 
 import stbi "vendor:stb/image"
@@ -206,6 +207,26 @@ sprites_push :: proc(s: ^Sprite_Renderer, tex: u32, x, y, w, h: f32, tint: [4]f3
 	v1 := Sprite_Vert{pos = {x1, y0}, uv = {1, 0}, color = tint}
 	v2 := Sprite_Vert{pos = {x1, y1}, uv = {1, 1}, color = tint}
 	v3 := Sprite_Vert{pos = {x0, y1}, uv = {0, 1}, color = tint}
+	append(&s.cpu_verts, v0, v1, v2, v0, v2, v3)
+	batch.count += 6
+}
+
+sprites_push_rotated :: proc(s: ^Sprite_Renderer, tex: u32, cx, cy, w, h, angle: f32, tint: [4]f32) {
+	if tex == 0 || int(tex) > len(s.textures) do return
+	batch := sprites_active_batch(s, tex)
+	co := math.cos(angle)
+	si := math.sin(angle)
+	hw := w * 0.5
+	hh := h * 0.5
+	// Rotate each corner around centre.
+	p0 := [2]f32{cx + (-hw)*co - (-hh)*si, cy + (-hw)*si + (-hh)*co}
+	p1 := [2]f32{cx + (+hw)*co - (-hh)*si, cy + (+hw)*si + (-hh)*co}
+	p2 := [2]f32{cx + (+hw)*co - (+hh)*si, cy + (+hw)*si + (+hh)*co}
+	p3 := [2]f32{cx + (-hw)*co - (+hh)*si, cy + (-hw)*si + (+hh)*co}
+	v0 := Sprite_Vert{pos = p0, uv = {0, 0}, color = tint}
+	v1 := Sprite_Vert{pos = p1, uv = {1, 0}, color = tint}
+	v2 := Sprite_Vert{pos = p2, uv = {1, 1}, color = tint}
+	v3 := Sprite_Vert{pos = p3, uv = {0, 1}, color = tint}
 	append(&s.cpu_verts, v0, v1, v2, v0, v2, v3)
 	batch.count += 6
 }

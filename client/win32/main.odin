@@ -101,6 +101,7 @@ main :: proc() {
 		load_texture        = plat_load_texture,
 		texture_size        = plat_texture_size,
 		draw_texture        = plat_draw_texture,
+		draw_texture_ex     = plat_draw_texture_ex,
 		set_camera          = plat_set_camera,
 		clear_camera        = plat_clear_camera,
 		push_scissor        = plat_push_scissor,
@@ -333,6 +334,11 @@ plat_texture_size :: proc(p: ^common.Platform, tex: common.Texture) -> [2]f32 {
 @(private="file")
 plat_draw_texture :: proc(p: ^common.Platform, tex: common.Texture, x, y, w, h: f32, tint: [4]f32) {
 	gfx_push_texture(&app_of(p).graphics, u32(tex), x, y, w, h, tint)
+}
+
+@(private="file")
+plat_draw_texture_ex :: proc(p: ^common.Platform, tex: common.Texture, cx, cy, w, h, angle: f32, tint: [4]f32) {
+	gfx_push_texture_ex(&app_of(p).graphics, u32(tex), cx, cy, w, h, angle, tint)
 }
 
 @(private="file")

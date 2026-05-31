@@ -160,6 +160,7 @@ make_platform :: proc() -> common.Platform {
 		load_texture        = plat_load_texture,
 		texture_size        = plat_texture_size,
 		draw_texture        = plat_draw_texture,
+		draw_texture_ex     = plat_draw_texture_ex,
 		set_camera          = plat_set_camera,
 		clear_camera        = plat_clear_camera,
 		push_scissor        = plat_push_scissor,
@@ -269,6 +270,12 @@ plat_texture_size :: proc(p: ^common.Platform, tex: common.Texture) -> [2]f32 {
 @(private="file")
 plat_draw_texture :: proc(p: ^common.Platform, tex: common.Texture, x, y, w, h: f32, tint: [4]f32) {
 	js_draw_texture(i32(tex), x, y, w, h, tint[0], tint[1], tint[2], tint[3])
+}
+
+@(private="file")
+plat_draw_texture_ex :: proc(p: ^common.Platform, tex: common.Texture, cx, cy, w, h, angle: f32, tint: [4]f32) {
+	// Web host doesn't yet support rotation; draw unrotated at the correct centre.
+	js_draw_texture(i32(tex), cx - w*0.5, cy - h*0.5, w, h, tint[0], tint[1], tint[2], tint[3])
 }
 
 @(private="file")

@@ -147,3 +147,7 @@ gfx_texture_size :: proc(g: ^Graphics, tex: u32) -> [2]f32 {
 gfx_push_texture :: proc(g: ^Graphics, tex: u32, x, y, w, h: f32, tint: [4]f32) {
 	sprites_push(&g.sprites, tex, x, y, w, h, tint)
 }
+
+gfx_push_texture_ex :: proc(g: ^Graphics, tex: u32, cx, cy, w, h, angle: f32, tint: [4]f32) {
+	sprites_push_rotated(&g.sprites, tex, cx, cy, w, h, angle, tint)
+}

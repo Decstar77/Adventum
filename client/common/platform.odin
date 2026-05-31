@@ -95,9 +95,11 @@ Platform :: struct {
 	// `draw_texture` fills the dest rect (x,y,w,h) in the same coordinate space
 	// as draw_rect — world space under an active camera, else screen space —
 	// with the texture multiplied by `tint` ({1,1,1,1} leaves it unmodified).
-	load_texture:  proc(p: ^Platform, path: string) -> Texture,
-	texture_size:  proc(p: ^Platform, tex: Texture) -> [2]f32,
-	draw_texture:  proc(p: ^Platform, tex: Texture, x, y, w, h: f32, tint: [4]f32),
+	load_texture:    proc(p: ^Platform, path: string) -> Texture,
+	texture_size:    proc(p: ^Platform, tex: Texture) -> [2]f32,
+	draw_texture:    proc(p: ^Platform, tex: Texture, x, y, w, h: f32, tint: [4]f32),
+	// Like draw_texture but cx,cy is the centre of the dest and angle rotates it (radians).
+	draw_texture_ex: proc(p: ^Platform, tex: Texture, cx, cy, w, h, angle: f32, tint: [4]f32),
 
 	// View / clipping. set_camera applies a 2D affine: world -> screen via
 	// pos*scale + offset. clear_camera resets to identity (screen-space).
